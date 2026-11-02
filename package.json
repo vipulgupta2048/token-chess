@@ -1,0 +1,42 @@
+{
+	"name": "cmd-mod-token-chess",
+	"version": "0.0.1",
+	"description": "Play chess in the Command Code TUI while your agent works. Zero dependencies, deterministic engine.",
+	"type": "module",
+	"license": "MIT",
+	"author": {
+		"name": "Vipul Gupta",
+		"url": "https://mixster.dev"
+	},
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/vipulgupta2048/token-chess.git"
+	},
+	"keywords": [
+		"cmd-mod",
+		"cmd-mod-command",
+		"chess",
+		"terminal",
+		"game",
+		"commandcode"
+	],
+	"commandcode": {
+		"mods": [
+			"./index.ts"
+		]
+	},
+	"files": [
+		"index.ts",
+		"src",
+		"!src/__tests__"
+	],
+	"scripts": {
+		"test": "vitest run",
+		"typecheck": "tsc --noEmit"
+	},
+	"devDependencies": {
+		"@types/node": "^24.10.9",
+		"typescript": "^5.9.2",
+		"vitest": "^4.1.11"
+	}
+}
