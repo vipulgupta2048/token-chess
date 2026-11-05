@@ -1,37 +1,80 @@
 // token-chess: play chess in the Command Code TUI while the agent works.
 //
-//   /chess e4      you move, the engine replies, the board prints in the feed
+//   /chess         the board opens in a pane above the prompt; type moves in it
+//   /chess e4      the same move from the prompt, the pane updates in place
 //
-// Mod slash commands run while a turn is in flight, so a game goes on beside
-// the agent's work. The footer status keeps the game state in view, and the
-// engine yields to the event loop while it thinks so the stream never stalls.
+// Pane input and mod slash commands both run while a turn is in flight, so a
+// game goes on beside the agent's work. The footer status keeps the game state
+// in view, and the engine yields to the event loop while it thinks so the
+// stream never stalls. Hosts without panes get a board in the feed each turn.
 
-import {type Action, HELP, parseAction} from './src/command.js';
-import {chooseMove, type EngineResult, LEVELS} from './src/engine.js';
+import {type Action, HELP, MAX_LEVEL, parseAction} from './src/command.js';
+import {chooseMove, LEVELS} from './src/engine.js';
 import {
 	colorName,
 	currentPosition,
 	describeOutcome,
 	type Game,
+	materialLead,
+	moveLines,
 	moveListText,
 	newGame,
 	outcomeOf,
 	playMove,
 	undoTurn,
 } from './src/game.js';
-import type {ModApi} from './src/mod-api.js';
-import {isInCheck, legalMoves} from './src/moves.js';
-import {toFen} from './src/position.js';
-import {type BoardView, bold, dim, renderBoard} from './src/render.js';
-import {parseMove, toSan} from './src/san.js';
+import type {ModApi, PaneNode} from './src/mod-api.js';
+import {isInCheck} from './src/moves.js';
+import {
+	BACK,
+	BACK_OPTION,
+	MENU,
+	MENU_OPTION,
+	MORE,
+	movesFrom,
+	pageOf,
+	pieceOptions,
+	targetOptions,
+} from './src/picker.js';
+import {opponent, parseSquare, toFen} from './src/position.js';
+import {
+	type BoardView,
+	bold,
+	dim,
+	renderBoard,
+	renderPanel,
+	wrapText,
+} from './src/render.js';
+import {explainIllegal, parseMove} from './src/san.js';
 import {defaultGameFile, loadGame, saveGame} from './src/store.js';
 
 const RENDERER = 'token-chess';
+const PANE = 'board';
 const DEFAULT_LEVEL = 3;
 const PIECE = '♙';
+const PANE_MOVES = 4;
+
+const WAIT = 'wait';
+const UNDO = 'undo';
+const NEW = 'new';
+const LEVEL = 'level';
+const RESIGN = 'resign';
+const RESIGN_YES = 'resign-yes';
+const TYPE = 'type';
+
+type Stage = 'piece' | 'target' | 'menu' | 'side' | 'level' | 'resign';
 
 interface Reply {
 	readonly message?: string;
+}
+
+// Where the arrow-key control is. It belongs to one game state, so any move,
+// from anywhere, puts it back to choosing a piece.
+interface Pick {
+	readonly game: Game;
+	readonly stage: Stage;
+	readonly from?: string;
+	readonly page: number;
 }
 
 function lastMoveSquares(game: Game): readonly number[] {
@@ -58,28 +101,71 @@ function promptLine(game: Game): string {
 	return `${check}Your move ${dim(`· /chess ${examples}`)}`;
 }
 
-function formatNodes(nodes: number): string {
-	if (nodes < 1000) return String(nodes);
-	return `${(nodes / 1000).toFixed(1)}k`;
-}
-
-function boardView(game: Game, engine: EngineResult | undefined): BoardView {
+function boardView(game: Game): BoardView {
 	const position = currentPosition(game);
 	const moves = moveListText(game, 10);
-	const engineNote = engine
-		? dim(
-				` · engine depth ${engine.depth}, ${formatNodes(engine.nodes)} nodes`,
-			)
-		: '';
+	const king = position.turn === 'w' ? 'K' : 'k';
 	return {
 		fen: toFen(position),
 		player: game.player,
 		highlight: lastMoveSquares(game),
+		...(isInCheck(position) ? {checked: position.board.indexOf(king)} : {}),
 		heading: dim(
 			`token-chess · you play ${colorName(game.player)} · level ${game.level} · move ${position.fullmove}`,
 		),
-		notes: [...(moves ? [`${moves}${engineNote}`] : []), promptLine(game)],
+		notes: [...(moves ? [moves] : []), promptLine(game)],
 	};
+}
+
+// The board with the picked piece lit and where it can go marked: dots on
+// empty squares, the same light on anything it captures.
+function pickedView(game: Game, from: string | undefined): BoardView {
+	const view = boardView(game);
+	if (!from) return view;
+	const moves = movesFrom(currentPosition(game), from);
+	return {
+		...view,
+		highlight: [
+			parseSquare(from),
+			...moves.filter(move => move.captured !== '').map(move => move.to),
+		],
+		dots: moves.filter(move => move.captured === '').map(move => move.to),
+	};
+}
+
+function capitalized(word: string): string {
+	return (word[0] ?? '').toUpperCase() + word.slice(1);
+}
+
+function lastMoveText(game: Game): string {
+	const last = game.sanLog[game.sanLog.length - 1];
+	if (!last) return '';
+	const mover = opponent(currentPosition(game).turn);
+	return dim(` · ${capitalized(colorName(mover))} played ${last}`);
+}
+
+// The line over the board: what the game needs from you right now.
+function paneHeadline(game: Game, thinking: boolean): string {
+	const outcome = outcomeOf(game);
+	if (outcome.kind !== 'ongoing')
+		return `${bold(capitalized(describeOutcome(outcome)))}${lastMoveText(game)}`;
+	const check = isInCheck(currentPosition(game)) ? bold('Check! ') : '';
+	const prompt = thinking ? 'Thinking…' : bold('Your move');
+	return `${check}${prompt}${lastMoveText(game)}`;
+}
+
+function materialText(game: Game): string {
+	const lead = materialLead(game);
+	if (lead === 0) return '';
+	return lead > 0 ? `You're up ${lead}` : `You're down ${-lead}`;
+}
+
+function sideLines(game: Game): readonly string[] {
+	const material = materialText(game);
+	return [
+		...moveLines(game, PANE_MOVES),
+		...(material ? ['', dim(material)] : []),
+	];
 }
 
 function statusText(game: Game, thinking: boolean): string {
@@ -96,22 +182,37 @@ function statusText(game: Game, thinking: boolean): string {
 	return `${PIECE} chess · ${turn}${lastText}`;
 }
 
-function legalList(game: Game): string {
-	const position = currentPosition(game);
-	return legalMoves(position)
-		.map(move => toSan(position, move))
-		.join(' ');
-}
-
 export default function tokenChess(cmd: ModApi): void {
 	const file = defaultGameFile();
+	const hasPane = cmd.ui.capabilities?.surface === true;
 	let game = loadGame(file);
 	let thinking = false;
+	let searches = 0;
+	// The answer to the last thing typed in the pane, until the next one.
+	let notice = '';
+	let pick: Pick | undefined;
+	let isTyping = false;
 
-	function show(current: Game, engine?: EngineResult): void {
-		saveGame(file, current);
+	function currentPick(current: Game): Pick {
+		return pick?.game === current
+			? pick
+			: {game: current, stage: 'piece', page: 0};
+	}
+
+	function currentGame(): Game {
+		game ??= newGame({player: 'w', level: DEFAULT_LEVEL});
+		return game;
+	}
+
+	function paint(current: Game): void {
 		cmd.ui.setStatus(statusText(current, thinking));
-		cmd.showEntry(RENDERER, boardView(current, engine));
+		if (hasPane) cmd.ui.refreshWidgets();
+	}
+
+	function show(current: Game): void {
+		saveGame(file, current);
+		paint(current);
+		if (!hasPane) cmd.showEntry(RENDERER, boardView(current));
 	}
 
 	async function engineTurn(current: Game): Promise<void> {
@@ -120,16 +221,17 @@ export default function tokenChess(cmd: ModApi): void {
 		if (outcomeOf(current).kind !== 'ongoing') return show(current);
 		const level = LEVELS[current.level - 1] ?? LEVELS[DEFAULT_LEVEL - 1];
 		if (!level) return show(current);
+		const search = ++searches;
 		thinking = true;
-		cmd.ui.setStatus(statusText(current, thinking));
-		const result = await chooseMove(position, level);
-		thinking = false;
-		if (!result) return show(current);
-		// A /chess new or undo while the engine thought replaced the game:
+		paint(current);
+		const result = await chooseMove(position, level, current.positions);
+		if (search === searches) thinking = false;
+		// A /chess new or resign while the engine thought replaced the game:
 		// this reply belongs to a board that no longer exists.
-		if (game !== current) return;
+		if (game && game !== current) return paint(game);
+		if (!result) return show(current);
 		game = playMove(current, result.move);
-		show(game, result);
+		show(game);
 	}
 
 	async function startNew(
@@ -144,19 +246,16 @@ export default function tokenChess(cmd: ModApi): void {
 	}
 
 	async function move(text: string): Promise<Reply> {
-		const current = game ?? newGame({player: 'w', level: DEFAULT_LEVEL});
-		game = current;
+		const current = currentGame();
 		if (thinking)
 			return {message: 'The engine is still thinking. One moment.'};
 		if (outcomeOf(current).kind !== 'ongoing')
 			return {message: 'This game is over. /chess new starts another.'};
 		const chosen = parseMove(currentPosition(current), text);
 		if (!chosen)
-			return {
-				message: `${text} is not legal here. Legal moves: ${legalList(current)}`,
-			};
-		// One board per turn: it prints after the engine's reply (or right
-		// away when this move ended the game); the footer covers the wait.
+			return {message: explainIllegal(currentPosition(current), text)};
+		// The pane shows your move at once; the feed prints one board per
+		// turn, after the engine's reply, and the footer covers the wait.
 		game = playMove(current, chosen);
 		await engineTurn(game);
 		return {};
@@ -167,11 +266,13 @@ export default function tokenChess(cmd: ModApi): void {
 		if (action.kind === 'invalid') return {message: action.message};
 		if (action.kind === 'new') return startNew(action);
 		if (action.kind === 'move') return move(action.text);
-		const current = game ?? newGame({player: 'w', level: DEFAULT_LEVEL});
-		game = current;
+		const current = currentGame();
 		if (action.kind === 'level') {
+			if (thinking)
+				return {message: 'Wait for the engine to finish its move.'};
 			game = {...current, level: action.level};
 			saveGame(file, game);
+			paint(game);
 			return {message: `Engine level set to ${action.level}.`};
 		}
 		if (action.kind === 'resign') {
@@ -186,11 +287,188 @@ export default function tokenChess(cmd: ModApi): void {
 			if (game === current)
 				return {message: 'Nothing of yours to take back.'};
 		}
-		show(game);
+		show(game ?? current);
 		return {};
 	}
 
+	// Everything from inside the pane answers inside the pane.
+	async function runInPane(action: Action): Promise<void> {
+		notice = '';
+		const reply = await run(action);
+		notice = reply.message ?? '';
+		cmd.ui.refreshWidgets();
+	}
+
+	function goTo(next: Pick): void {
+		pick = next;
+		notice = '';
+		cmd.ui.refreshWidgets();
+	}
+
+	// Option values never collide: squares, coordinate moves and these words.
+	function choose(current: Game, value: string): void {
+		const state = currentPick(current);
+		const inMenu = {game: current, stage: 'menu', page: 0} as const;
+		const atPieces = {game: current, stage: 'piece', page: 0} as const;
+		if (value === WAIT) return;
+		if (value === MORE) return goTo({...state, page: state.page + 1});
+		if (value === MENU) return goTo(inMenu);
+		if (value === BACK)
+			return goTo(
+				state.stage === 'target' || state.stage === 'menu'
+					? atPieces
+					: inMenu,
+			);
+		if (value === UNDO) return void runInPane({kind: 'undo'});
+		if (value === RESIGN) return goTo({...inMenu, stage: 'resign'});
+		if (value === RESIGN_YES) return void runInPane({kind: 'resign'});
+		if (value === NEW) return goTo({...inMenu, stage: 'side'});
+		if (value === 'w' || value === 'b')
+			return void runInPane({kind: 'new', player: value});
+		if (value === LEVEL) return goTo({...inMenu, stage: 'level'});
+		if (state.stage === 'level')
+			return void runInPane({kind: 'level', level: Number(value)});
+		if (value === TYPE) {
+			isTyping = true;
+			return goTo(atPieces);
+		}
+		if (state.stage === 'target')
+			return void runInPane({kind: 'move', text: value});
+		goTo({game: current, stage: 'target', from: value, page: 0});
+	}
+
+	// An empty Enter leaves typing for the picker again.
+	function submitTyped(text: string): void {
+		if (text.trim() !== '') return void runInPane(parseAction(text));
+		isTyping = false;
+		cmd.ui.refreshWidgets();
+	}
+
+	// One control at a time, always at the same spot, so focus stays on it; a
+	// new key per stage starts its highlight on the first option.
+	function controlNodes(current: Game, width: number): readonly PaneNode[] {
+		const select = (
+			key: string,
+			options: readonly {label: string; value: string}[],
+			value?: string,
+		): PaneNode => ({
+			type: 'select',
+			key,
+			options,
+			...(value ? {value} : {}),
+			onSelect: chosen => choose(current, chosen),
+		});
+		const {stage, from, page} = currentPick(current);
+		if (thinking)
+			return [
+				dim('Engine to move'),
+				select('wait', [{label: 'Thinking…', value: WAIT}]),
+			];
+		if (stage === 'menu')
+			return [
+				dim('Menu'),
+				select('menu', [
+					{label: 'Undo', value: UNDO},
+					{label: 'New game', value: NEW},
+					{label: `Level ${current.level}`, value: LEVEL},
+					{label: 'Resign', value: RESIGN},
+					{label: 'Type a move', value: TYPE},
+					BACK_OPTION,
+				]),
+			];
+		if (stage === 'side')
+			return [
+				dim('New game. Play as:'),
+				select('side', [
+					{label: 'White', value: 'w'},
+					{label: 'Black', value: 'b'},
+					BACK_OPTION,
+				]),
+			];
+		if (stage === 'level')
+			return [
+				dim('Engine level:'),
+				select(
+					'level',
+					[
+						...Array.from({length: MAX_LEVEL}, (_, index) => ({
+							label: String(index + 1),
+							value: String(index + 1),
+						})),
+						BACK_OPTION,
+					],
+					String(current.level),
+				),
+			];
+		if (stage === 'resign')
+			return [
+				dim('Resign this game?'),
+				select('resign', [
+					{label: 'Yes, resign', value: RESIGN_YES},
+					BACK_OPTION,
+				]),
+			];
+		if (outcomeOf(current).kind !== 'ongoing')
+			return [
+				dim('Game over'),
+				select('over', [{label: 'New game', value: NEW}]),
+			];
+		if (isTyping)
+			return [
+				dim('Type a move, or press Enter alone for the picker'),
+				{
+					type: 'input',
+					key: 'move',
+					placeholder: 'e4, Nf3, O-O',
+					value: '',
+					onSubmit: submitTyped,
+				},
+			];
+		const position = currentPosition(current);
+		const options = from
+			? targetOptions(position, from)
+			: pieceOptions(position);
+		return [
+			dim(`${from ? `Move ${from} to` : 'Choose a piece'}: ←/→ then Enter`),
+			select(
+				`pick-${current.sanLog.length}-${from ?? 'piece'}-${page}`,
+				pageOf({
+					options,
+					page,
+					width,
+					tail: [from ? BACK_OPTION : MENU_OPTION],
+				}),
+			),
+		];
+	}
+
+	function renderPane(width: number): readonly PaneNode[] {
+		const current = currentGame();
+		return [
+			paneHeadline(current, thinking),
+			...renderPanel({
+				view: pickedView(current, currentPick(current).from),
+				side: sideLines(current),
+				width,
+			}),
+			...(notice ? ['', ...wrapText(notice, width)] : []),
+			...controlNodes(current, width),
+		];
+	}
+
 	cmd.addRenderer(RENDERER, data => renderBoard(data as BoardView));
+
+	if (hasPane) {
+		cmd.ui.pane({
+			id: PANE,
+			title: 'Chess',
+			render: ({width}) => renderPane(width),
+		});
+		cmd.addShortcut('alt+c', {
+			description: 'Open the chess board and play in it',
+			handler: () => cmd.ui.openPane(PANE, {focus: true}),
+		});
+	}
 
 	cmd.addCommand({
 		name: 'chess',
@@ -198,7 +476,10 @@ export default function tokenChess(cmd: ModApi): void {
 		argumentHint:
 			'<move> | new [black] | undo | level <1-5> | resign | help',
 		handler: async ({args}) => {
-			const reply = await run(parseAction(args));
+			const action = parseAction(args);
+			notice = '';
+			if (hasPane) cmd.ui.openPane(PANE, {focus: action.kind === 'show'});
+			const reply = await run(action);
 			return reply.message ? {message: reply.message} : undefined;
 		},
 	});

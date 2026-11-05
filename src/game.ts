@@ -4,6 +4,7 @@
 import {applyMove, isInCheck, legalMoves, type Move} from './moves.js';
 import {
 	type Color,
+	colorOf,
 	opponent,
 	type Position,
 	parseFen,
@@ -121,18 +122,50 @@ export function describeOutcome(outcome: Outcome): string {
 	return `${colorName(outcome.winner)} wins by ${how}`;
 }
 
-// The move list as `1. e4 e5 2. Nf3`, last `count` plies only.
-export function moveListText(game: Game, count: number): string {
+function moveTokens(game: Game): readonly string[] {
 	const first = game.positions[0];
 	const blackStarts = first?.turn === 'b';
 	const startNumber = first?.fullmove ?? 1;
-	const tokens = game.sanLog.map((san, index) => {
+	return game.sanLog.map((san, index) => {
 		const ply = index + (blackStarts ? 1 : 0);
 		const number = startNumber + Math.floor(ply / 2);
 		if (ply % 2 === 0) return `${number}. ${san}`;
 		return index === 0 ? `${number}... ${san}` : san;
 	});
-	return tokens.slice(-count).join(' ');
+}
+
+// The move list as `1. e4 e5 2. Nf3`, last `count` plies only.
+export function moveListText(game: Game, count: number): string {
+	return moveTokens(game).slice(-count).join(' ');
+}
+
+// The last `count` full moves, one numbered line each.
+export function moveLines(game: Game, count: number): readonly string[] {
+	const lines: string[] = [];
+	for (const token of moveTokens(game)) {
+		const last = lines[lines.length - 1];
+		if (/^\d/.test(token) || last === undefined) lines.push(token);
+		else lines[lines.length - 1] = `${last} ${token}`;
+	}
+	return lines.slice(-count);
+}
+
+const POINTS: Readonly<Record<string, number>> = {
+	p: 1,
+	n: 3,
+	b: 3,
+	r: 5,
+	q: 9,
+};
+
+// Pawn points the player is ahead by, negative when behind.
+export function materialLead(game: Game): number {
+	let white = 0;
+	for (const piece of currentPosition(game).board) {
+		const points = POINTS[piece.toLowerCase()] ?? 0;
+		white += colorOf(piece) === 'w' ? points : -points;
+	}
+	return game.player === 'w' ? white : -white;
 }
 
 export interface SavedGame {

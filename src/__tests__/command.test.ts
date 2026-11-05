@@ -11,6 +11,7 @@ describe('parseAction', () => {
 		expect(parseAction('resign')).toEqual({kind: 'resign'});
 		expect(parseAction('level 5')).toEqual({kind: 'level', level: 5});
 		expect(parseAction('Nf3')).toEqual({kind: 'move', text: 'Nf3'});
+		expect(parseAction(' e2 e4 ')).toEqual({kind: 'move', text: 'e2 e4'});
 	});
 
 	it('refuses a bad level or side', () => {

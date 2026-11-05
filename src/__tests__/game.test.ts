@@ -4,6 +4,8 @@ import {
 	describeOutcome,
 	fromSaved,
 	type Game,
+	materialLead,
+	moveLines,
 	moveListText,
 	newGame,
 	outcomeOf,
@@ -120,5 +122,25 @@ describe('save and move list', () => {
 			'Nf3',
 		]);
 		expect(moveListText(game, 10)).toBe('1. e4 e5 2. Nf3');
+	});
+});
+
+describe('pane helpers', () => {
+	it('lists full moves one per line, last few only', () => {
+		const game = play(newGame({player: 'w', level: 1}), [
+			'e4',
+			'e5',
+			'Nf3',
+			'Nc6',
+			'Bc4',
+		]);
+		expect(moveLines(game, 2)).toEqual(['2. Nf3 Nc6', '3. Bc4']);
+		expect(moveLines(newGame({player: 'w', level: 1}), 2)).toEqual([]);
+	});
+
+	it('counts material from the player\'s side', () => {
+		const start = play(newGame({player: 'w', level: 1}), ['e4', 'd5', 'exd5']);
+		expect(materialLead(start)).toBe(1);
+		expect(materialLead({...start, player: 'b'})).toBe(-1);
 	});
 });
