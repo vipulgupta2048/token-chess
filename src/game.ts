@@ -1,6 +1,7 @@
 // A game: every position played so far plus the SAN log, so undo is just
 // dropping the tail and threefold repetition is a count over the history.
 
+import {DEFAULT_LEVEL, MAX_LEVEL} from './command.js';
 import {applyMove, isInCheck, legalMoves, type Move} from './moves.js';
 import {
 	type Color,
@@ -158,6 +159,54 @@ const POINTS: Readonly<Record<string, number>> = {
 	q: 9,
 };
 
+const START_COUNTS: Readonly<Record<string, number>> = {
+	q: 1,
+	r: 2,
+	b: 2,
+	n: 2,
+	p: 8,
+};
+
+// The pieces of `color` missing from the board, biggest first, as FEN letters.
+// A promotion can hide a capture; it is a glance at the game, not a ledger.
+export function capturedPieces(game: Game, color: Color): readonly string[] {
+	const board = currentPosition(game).board;
+	const missing: string[] = [];
+	for (const [kind, start] of Object.entries(START_COUNTS)) {
+		const letter = color === 'w' ? kind.toUpperCase() : kind;
+		const left = board.filter(piece => piece === letter).length;
+		for (let count = left; count < start; count++) missing.push(letter);
+	}
+	return missing;
+}
+
+function pgnResult(game: Game): string {
+	const outcome = outcomeOf(game);
+	if (outcome.kind === 'ongoing') return '*';
+	if (outcome.kind === 'draw') return '1/2-1/2';
+	return outcome.winner === 'w' ? '1-0' : '0-1';
+}
+
+// The game as PGN, for pasting into any chess site or app to replay it.
+export function toPgn(game: Game, date: Date): string {
+	const engine = `token-chess level ${game.level}`;
+	const result = pgnResult(game);
+	const day = date.toISOString().slice(0, 10).replace(/-/g, '.');
+	const first = game.positions[0];
+	const fen = first ? toFen(first) : START_FEN;
+	const headers = [
+		['Event', 'token-chess'],
+		['Site', 'Command Code'],
+		['Date', day],
+		['White', game.player === 'w' ? 'You' : engine],
+		['Black', game.player === 'b' ? 'You' : engine],
+		['Result', result],
+		...(fen === START_FEN ? [] : [['SetUp', '1'], ['FEN', fen]]),
+	];
+	const moves = [...moveTokens(game), result].join(' ');
+	return `${headers.map(([key, value]) => `[${key} "${value}"]`).join('\n')}\n\n${moves}\n`;
+}
+
 // Pawn points the player is ahead by, negative when behind.
 export function materialLead(game: Game): number {
 	let white = 0;
@@ -194,7 +243,11 @@ export function fromSaved(saved: SavedGame): Game | undefined {
 		positions: positions.filter(position => position !== undefined),
 		sanLog: saved.sanLog,
 		player: saved.player,
-		level: saved.level,
+		level: isLevel(saved.level) ? saved.level : DEFAULT_LEVEL,
 		resigned: saved.resigned,
 	};
+}
+
+function isLevel(level: number): boolean {
+	return Number.isInteger(level) && level >= 1 && level <= MAX_LEVEL;
 }

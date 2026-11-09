@@ -79,6 +79,12 @@ describe('parseMove forgives', () => {
 		expect(parseMove(both, 'BXC3')?.piece).toBe('B');
 	});
 
+	it('never reads an uppercase B as a pawn promoting', () => {
+		const board = position('r3k3/1P6/8/8/8/8/8/4K3 w - - 0 1');
+		expect(parseMove(board, 'Bxa8')).toBeUndefined();
+		expect(parseMove(board, 'bxa8')?.promotion).toBe('Q');
+	});
+
 	it('makes a queen when a promotion names no piece', () => {
 		const board = position('8/4P3/8/8/8/8/k7/4K3 w - - 0 1');
 		for (const text of ['e8', 'e7e8', 'e7-e8'])

@@ -1,7 +1,7 @@
 {
 	"name": "cmd-mod-token-chess",
-	"version": "0.0.1",
-	"description": "Play chess in the Command Code TUI while your agent works. Zero dependencies, deterministic engine.",
+	"version": "0.1.0",
+	"description": "Play chess against a built-in engine in a pane beside your Command Code prompt while the agent works. Arrow-key moves, zero dependencies.",
 	"type": "module",
 	"license": "MIT",
 	"author": {
@@ -12,9 +12,12 @@
 		"type": "git",
 		"url": "git+https://github.com/vipulgupta2048/token-chess.git"
 	},
+	"homepage": "https://github.com/vipulgupta2048/token-chess#readme",
+	"bugs": "https://github.com/vipulgupta2048/token-chess/issues",
 	"keywords": [
 		"cmd-mod",
 		"cmd-mod-command",
+		"cmd-mod-renderer",
 		"chess",
 		"terminal",
 		"game",

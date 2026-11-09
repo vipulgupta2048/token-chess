@@ -8,11 +8,13 @@ export type Action =
 	| {readonly kind: 'new'; readonly player: Color}
 	| {readonly kind: 'undo'}
 	| {readonly kind: 'resign'}
+	| {readonly kind: 'pgn'}
 	| {readonly kind: 'level'; readonly level: number}
 	| {readonly kind: 'move'; readonly text: string}
 	| {readonly kind: 'invalid'; readonly message: string};
 
 export const MAX_LEVEL = 5;
+export const DEFAULT_LEVEL = 3;
 
 export const HELP = [
 	'/chess              show the board and start typing moves in it',
@@ -21,6 +23,7 @@ export const HELP = [
 	'/chess undo         take back your last move and the reply',
 	`/chess level <1-${MAX_LEVEL}>  engine strength (default 3)`,
 	'/chess resign       give up the current game',
+	'/chess pgn          copy the game as PGN',
 ].join('\n');
 
 function parsePlayer(word: string | undefined): Color | undefined {
@@ -43,6 +46,7 @@ export function parseAction(args: string): Action {
 	if (word === 'help') return {kind: 'help'};
 	if (word === 'undo' || word === 'takeback') return {kind: 'undo'};
 	if (word === 'resign') return {kind: 'resign'};
+	if (word === 'pgn') return {kind: 'pgn'};
 	if (word === 'level') return parseLevel(second);
 	if (word !== 'new') return {kind: 'move', text: args.trim()};
 	const player = parsePlayer(second?.toLowerCase());

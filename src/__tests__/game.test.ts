@@ -3,6 +3,7 @@ import {
 	currentPosition,
 	describeOutcome,
 	fromSaved,
+	capturedPieces,
 	type Game,
 	materialLead,
 	moveLines,
@@ -10,6 +11,7 @@ import {
 	newGame,
 	outcomeOf,
 	playMove,
+	toPgn,
 	toSaved,
 	undoTurn,
 } from '../game.js';
@@ -142,5 +144,28 @@ describe('pane helpers', () => {
 		const start = play(newGame({player: 'w', level: 1}), ['e4', 'd5', 'exd5']);
 		expect(materialLead(start)).toBe(1);
 		expect(materialLead({...start, player: 'b'})).toBe(-1);
+	});
+});
+
+describe('captures and PGN', () => {
+	it('lists what each side has lost', () => {
+		const game = play(newGame({player: 'w', level: 1}), ['e4', 'd5', 'exd5', 'Qxd5']);
+		expect(capturedPieces(game, 'b')).toEqual(['p']);
+		expect(capturedPieces(game, 'w')).toEqual(['P']);
+	});
+
+	it('writes a PGN any chess site reads', () => {
+		const game = play(newGame({player: 'b', level: 2}), ['f3', 'e5', 'g4', 'Qh4#']);
+		const pgn = toPgn(game, new Date('2026-11-09T12:00:00Z'));
+		expect(pgn).toContain('[Date "2026.11.09"]');
+		expect(pgn).toContain('[White "token-chess level 2"]');
+		expect(pgn).toContain('[Black "You"]');
+		expect(pgn).toContain('[Result "0-1"]');
+		expect(pgn.trim().endsWith('1. f3 e5 2. g4 Qh4# 0-1')).toBe(true);
+	});
+
+	it('falls back to the default level for a bad saved one', () => {
+		const saved = {...toSaved(newGame({player: 'w', level: 2})), level: 99};
+		expect(fromSaved(saved)?.level).toBe(3);
 	});
 });

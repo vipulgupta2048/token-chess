@@ -6,10 +6,14 @@ in a second or two at most, and the footer keeps the game in view. Same idea as
 [token-snake](https://github.com/vipulgupta2048/token-snake), but as a mod: no
 second terminal pane, and chess is turn based, so it fits between agent steps.
 
+![token-chess in a pane above the Command Code prompt](docs/board.svg)
+
 Zero runtime dependencies. Deterministic engine: the same position, game history
 and level always get the same reply.
 
 ## Try it
+
+Needs Command Code 1.85 or later, for mod panes.
 
 ```bash
 # Install it for every session
@@ -26,8 +30,9 @@ board opens with one control under it, driven by ←/→ and Enter:
 1. Choose a piece.
 2. Choose its square. Dots mark where it can go, and captures light up.
 
-Undo, New game, Level, Resign and Type a move are under `≡ menu` at the end of
-the list. Esc hands the keyboard back to the prompt, and `/chess`, Alt+C or
+Undo, New game, Level, Resign, Type a move and Copy PGN are under `≡ menu` at
+the end of the list. Beside the board are your last few moves, the pieces each
+side has taken, and who is ahead. Esc hands the keyboard back to the prompt, and `/chess`, Alt+C or
 Alt+↑ returns to the board. Alt+0 closes it.
 
 Everything also works from the prompt, or in Type a move:
@@ -40,12 +45,37 @@ Everything also works from the prompt, or in Type a move:
 | `undo` | Take back your last move and the engine's reply |
 | `level <1-5>` | Engine strength, default 3 |
 | `resign` | Give up the current game |
+| `pgn` | Copy the game as PGN, to replay or analyse on any chess site |
 | `help` | The list above |
 
 An illegal move is answered in terms of the piece you named: `Nd5` gets "no
 knight can reach d5" and that piece's legal moves. The game is saved to
 `~/.commandcode/token-chess/game.json`, so it survives `/reload` and new
 sessions. On a host without panes, each turn prints a board in the feed instead.
+
+## How it compares
+
+Standalone terminal chess apps such as
+[gambit](https://github.com/maaslalani/gambit),
+[chess-tui](https://github.com/thomas-mauran/chess-tui) and
+[cli-chess](https://github.com/trevorbayless/cli-chess) take over the terminal
+and do more: online play, Stockfish, themes. token-chess is for the minutes an
+agent is working, so it lives in a pane beside your prompt instead.
+
+| | token-chess | Standalone TUI apps |
+|---|---|---|
+| Runs | In a Command Code pane, while the agent works | In their own terminal window |
+| Moves | ←/→ and Enter, or typed SAN and squares | Cursor, mouse, or typed |
+| Legal-move hints | Dots and lit captures after picking a piece | Most |
+| Opponent | Built-in engine, 5 levels, no install | Stockfish or another UCI engine, Lichess |
+| Captured pieces, PGN | Yes | Varies |
+| Install | One `cmd mods add` | Cargo, Go, pip or a package manager |
+
+## What it can reach
+
+`cmd mods inspect` reports the clipboard, for Copy PGN, and the filesystem, for
+the saved game at `~/.commandcode/token-chess/game.json`. Nothing else: no
+network, no processes, no hooks on the agent's work.
 
 ## How it fits the mod API
 
@@ -57,6 +87,7 @@ sessions. On a host without panes, each turn prints a board in the feed instead.
 | Keep the game visible | `cmd.ui.setStatus`, one footer segment: `♙ chess · your move · last Nf6` |
 | Offer a game while you wait | `cmd.on('run_start')` sets `♙ /chess to play while you wait` when no game is going |
 | Resume a saved game | `cmd.hooks({onSessionStart})` |
+| Copy the game | `cmd.ui.copy`, with the PGN shown instead where nothing can copy |
 
 ## Engine
 
@@ -91,6 +122,10 @@ check, en passant pins, promotions, discovered checks).
 - **A cursor on the board.** Mod shortcuts need Ctrl or Alt, a pane only takes
   buttons, inputs and selects, and a select doesn't report its highlight until
   Enter, so the picker can't preview a piece before you choose it.
+- **The pane's key hints.** Command Code draws "Tab to move" under every focused
+  pane. Tab does nothing here, since the pane has one control.
+- **The desktop app.** It draws panes, but can't focus a select and drops the
+  board's colors, so play in the terminal.
 
 ## Develop
 

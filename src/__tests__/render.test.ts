@@ -52,6 +52,16 @@ describe('renderPanel', () => {
 		expect(lines[2]).toMatch(/^ 6 /);
 	});
 
+	it('cuts a side line that would run past the pane', () => {
+		const lines = renderPanel({
+			view,
+			side: ['100. exd8=Q+ exd8=Q+'],
+			width: 50,
+		}).map(plain);
+		expect(lines[0]?.length).toBeLessThanOrEqual(50);
+		expect(lines[0]).toContain('…');
+	});
+
 	it('stacks them under the board in a narrow pane', () => {
 		const lines = renderPanel({view, side, width: 40}).map(plain);
 		expect(lines).toHaveLength(11);

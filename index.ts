@@ -8,12 +8,19 @@
 // in view, and the engine yields to the event loop while it thinks so the
 // stream never stalls. Hosts without panes get a board in the feed each turn.
 
-import {type Action, HELP, MAX_LEVEL, parseAction} from './src/command.js';
+import {
+	type Action,
+	DEFAULT_LEVEL,
+	HELP,
+	MAX_LEVEL,
+	parseAction,
+} from './src/command.js';
 import {chooseMove, LEVELS} from './src/engine.js';
 import {
 	colorName,
 	currentPosition,
 	describeOutcome,
+	capturedPieces,
 	type Game,
 	materialLead,
 	moveLines,
@@ -21,6 +28,7 @@ import {
 	newGame,
 	outcomeOf,
 	playMove,
+	toPgn,
 	undoTurn,
 } from './src/game.js';
 import type {ModApi, PaneNode} from './src/mod-api.js';
@@ -41,6 +49,7 @@ import {
 	type BoardView,
 	bold,
 	dim,
+	GLYPHS,
 	renderBoard,
 	renderPanel,
 	wrapText,
@@ -50,9 +59,10 @@ import {defaultGameFile, loadGame, saveGame} from './src/store.js';
 
 const RENDERER = 'token-chess';
 const PANE = 'board';
-const DEFAULT_LEVEL = 3;
 const PIECE = '♙';
 const PANE_MOVES = 4;
+// A pane drops empty lines, so a gap between sections is one space.
+const BLANK = ' ';
 
 const WAIT = 'wait';
 const UNDO = 'undo';
@@ -61,6 +71,7 @@ const LEVEL = 'level';
 const RESIGN = 'resign';
 const RESIGN_YES = 'resign-yes';
 const TYPE = 'type';
+const PGN = 'pgn';
 
 type Stage = 'piece' | 'target' | 'menu' | 'side' | 'level' | 'resign';
 
@@ -160,11 +171,23 @@ function materialText(game: Game): string {
 	return lead > 0 ? `You're up ${lead}` : `You're down ${-lead}`;
 }
 
+function glyphs(letters: readonly string[]): string {
+	return letters.map(letter => GLYPHS[letter] ?? '').join('');
+}
+
+// Recent moves, then what each side has taken and who is ahead.
 function sideLines(game: Game): readonly string[] {
+	const taken = capturedPieces(game, opponent(game.player));
+	const lost = capturedPieces(game, game.player);
 	const material = materialText(game);
+	const tally = [
+		...(taken.length > 0 ? [`Taken ${glyphs(taken)}`] : []),
+		...(lost.length > 0 ? [`Lost  ${glyphs(lost)}`] : []),
+		...(material ? [material] : []),
+	];
 	return [
 		...moveLines(game, PANE_MOVES),
-		...(material ? ['', dim(material)] : []),
+		...(tally.length > 0 ? [BLANK, ...tally.map(line => dim(line))] : []),
 	];
 }
 
@@ -234,9 +257,16 @@ export default function tokenChess(cmd: ModApi): void {
 		show(game);
 	}
 
+	// Leaves any search running to finish unheard: its game is gone.
+	function abandonSearch(): void {
+		searches++;
+		thinking = false;
+	}
+
 	async function startNew(
 		action: Extract<Action, {kind: 'new'}>,
 	): Promise<Reply> {
+		abandonSearch();
 		game = newGame({
 			player: action.player,
 			level: game?.level ?? DEFAULT_LEVEL,
@@ -251,6 +281,11 @@ export default function tokenChess(cmd: ModApi): void {
 			return {message: 'The engine is still thinking. One moment.'};
 		if (outcomeOf(current).kind !== 'ongoing')
 			return {message: 'This game is over. /chess new starts another.'};
+		// Only a hand-edited save leaves the engine to move with none thinking.
+		if (currentPosition(current).turn !== current.player) {
+			void engineTurn(current);
+			return {message: 'The engine is to move. One moment.'};
+		}
 		const chosen = parseMove(currentPosition(current), text);
 		if (!chosen)
 			return {message: explainIllegal(currentPosition(current), text)};
@@ -266,6 +301,7 @@ export default function tokenChess(cmd: ModApi): void {
 		if (action.kind === 'invalid') return {message: action.message};
 		if (action.kind === 'new') return startNew(action);
 		if (action.kind === 'move') return move(action.text);
+		if (action.kind === 'pgn') return copyPgn(currentGame());
 		const current = currentGame();
 		if (action.kind === 'level') {
 			if (thinking)
@@ -278,6 +314,7 @@ export default function tokenChess(cmd: ModApi): void {
 		if (action.kind === 'resign') {
 			if (outcomeOf(current).kind !== 'ongoing')
 				return {message: 'This game is already over.'};
+			abandonSearch();
 			game = {...current, resigned: true};
 		}
 		if (action.kind === 'undo') {
@@ -289,6 +326,15 @@ export default function tokenChess(cmd: ModApi): void {
 		}
 		show(game ?? current);
 		return {};
+	}
+
+	// Copies the game for any chess site; where nothing can copy, the PGN
+	// itself is the answer.
+	async function copyPgn(current: Game): Promise<Reply> {
+		const pgn = toPgn(current, new Date());
+		const copied = await cmd.ui.copy(pgn);
+		if (copied.isCopied) return {message: 'PGN copied to the clipboard.'};
+		return {message: pgn};
 	}
 
 	// Everything from inside the pane answers inside the pane.
@@ -320,6 +366,7 @@ export default function tokenChess(cmd: ModApi): void {
 					: inMenu,
 			);
 		if (value === UNDO) return void runInPane({kind: 'undo'});
+		if (value === PGN) return void runInPane({kind: 'pgn'});
 		if (value === RESIGN) return goTo({...inMenu, stage: 'resign'});
 		if (value === RESIGN_YES) return void runInPane({kind: 'resign'});
 		if (value === NEW) return goTo({...inMenu, stage: 'side'});
@@ -367,14 +414,22 @@ export default function tokenChess(cmd: ModApi): void {
 		if (stage === 'menu')
 			return [
 				dim('Menu'),
-				select('menu', [
-					{label: 'Undo', value: UNDO},
-					{label: 'New game', value: NEW},
-					{label: `Level ${current.level}`, value: LEVEL},
-					{label: 'Resign', value: RESIGN},
-					{label: 'Type a move', value: TYPE},
-					BACK_OPTION,
-				]),
+				select(
+					`menu-${page}`,
+					pageOf({
+						options: [
+							{label: 'Undo', value: UNDO},
+							{label: 'New game', value: NEW},
+							{label: `Level ${current.level}`, value: LEVEL},
+							{label: 'Resign', value: RESIGN},
+							{label: 'Type a move', value: TYPE},
+							{label: 'Copy PGN', value: PGN},
+						],
+						page,
+						width,
+						tail: [BACK_OPTION],
+					}),
+				),
 			];
 		if (stage === 'side')
 			return [
@@ -411,7 +466,10 @@ export default function tokenChess(cmd: ModApi): void {
 		if (outcomeOf(current).kind !== 'ongoing')
 			return [
 				dim('Game over'),
-				select('over', [{label: 'New game', value: NEW}]),
+				select('over', [
+					{label: 'New game', value: NEW},
+					{label: 'Copy PGN', value: PGN},
+				]),
 			];
 		if (isTyping)
 			return [
@@ -446,12 +504,14 @@ export default function tokenChess(cmd: ModApi): void {
 		const current = currentGame();
 		return [
 			paneHeadline(current, thinking),
+			BLANK,
 			...renderPanel({
 				view: pickedView(current, currentPick(current).from),
 				side: sideLines(current),
 				width,
 			}),
-			...(notice ? ['', ...wrapText(notice, width)] : []),
+			BLANK,
+			...(notice ? [...wrapText(notice, width), BLANK] : []),
 			...controlNodes(current, width),
 		];
 	}

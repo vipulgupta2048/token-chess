@@ -62,6 +62,9 @@ export interface ModUi {
 	pane(pane: ModPane): Disposable;
 	openPane(id: string, options?: {focus?: boolean}): void;
 	refreshWidgets(): void;
+	copy(
+		text: string,
+	): Promise<{readonly isCopied: boolean; readonly reason?: string}>;
 }
 
 export interface ModShortcut {

@@ -1,11 +1,12 @@
 // Drives the mod through a stub of the Command Code mod API: the same calls
 // the host makes, with the feed and footer captured as plain text.
 
-import {mkdtempSync} from 'node:fs';
+import {mkdirSync, mkdtempSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
-import {join} from 'node:path';
+import {dirname, join} from 'node:path';
 import {beforeEach, describe, expect, it, vi} from 'vitest';
 import tokenChess from './index.js';
+import {defaultGameFile} from './src/store.js';
 import type {
 	InputElement,
 	ModApi,
@@ -29,6 +30,7 @@ interface Stub {
 	readonly pick: (label: string) => void;
 	readonly picks: () => readonly string[];
 	readonly hasInput: () => boolean;
+	readonly copied: () => readonly string[];
 }
 
 function loadChess(options: {hasPane: boolean} = {hasPane: false}): Stub {
@@ -39,6 +41,7 @@ function loadChess(options: {hasPane: boolean} = {hasPane: false}): Stub {
 	let command: ModCommand | undefined;
 	let pane: ModPane | undefined;
 	const opened: {id: string; focus: boolean}[] = [];
+	const copied: string[] = [];
 	const disposable = {dispose: (): void => {}};
 	const cmd: ModApi = {
 		ui: {
@@ -55,6 +58,10 @@ function loadChess(options: {hasPane: boolean} = {hasPane: false}): Stub {
 				opened.push({id, focus: openOptions?.focus === true});
 			},
 			refreshWidgets: () => {},
+			copy: async text => {
+				copied.push(text);
+				return {isCopied: true};
+			},
 		},
 		hooks: () => disposable,
 		on: () => disposable,
@@ -87,6 +94,7 @@ function loadChess(options: {hasPane: boolean} = {hasPane: false}): Stub {
 			select()?.onSelect(option.value);
 		},
 		picks: () => select()?.options.map(item => item.label) ?? [],
+		copied: () => copied,
 		hasInput: () =>
 			nodes().some(node => typeof node === 'object' && node.type === 'input'),
 		run: async args => command?.handler({args}),
@@ -118,7 +126,7 @@ async function settled(check: () => boolean): Promise<void> {
 describe('token-chess mod', () => {
 	let chess: Stub;
 	beforeEach(() => {
-		process.env.HOME = mkdtempSync(join(tmpdir(), 'token-chess-home-'));
+		vi.stubEnv('HOME', mkdtempSync(join(tmpdir(), 'token-chess-home-')));
 		chess = loadChess();
 	});
 
@@ -168,7 +176,7 @@ describe('token-chess mod in a pane', () => {
 	let chess: Stub;
 	const isIdle = () => chess.status().includes('your move');
 	beforeEach(() => {
-		process.env.HOME = mkdtempSync(join(tmpdir(), 'token-chess-home-'));
+		vi.stubEnv('HOME', mkdtempSync(join(tmpdir(), 'token-chess-home-')));
 		chess = loadChess({hasPane: true});
 	});
 
@@ -307,9 +315,52 @@ describe('token-chess mod in a pane', () => {
 		chess.pick('Thinking…');
 		await settled(isIdle);
 		await chess.run('resign');
-		expect(chess.picks()).toEqual(['New game']);
+		expect(chess.picks()).toEqual(['New game', 'Copy PGN']);
 		chess.pick('New game');
 		chess.pick('White');
 		await settled(() => chess.pane().includes('Choose a piece:'));
+	});
+
+	it('copies the game as PGN from the menu', async () => {
+		chess.pick('e2');
+		chess.pick('e4');
+		await settled(() => /1\. e4 \S+/.test(chess.pane()) && isIdle());
+		chess.pick('≡ menu');
+		chess.pick('Copy PGN');
+		await settled(() => chess.pane().includes('PGN copied'));
+		expect(chess.copied()[0]).toMatch(/\[White "You"\][\s\S]*1\. e4 \S+ \*/);
+	});
+
+	it('frees the board when a new game replaces one mid-search', async () => {
+		await chess.run('level 5');
+		chess.pick('e2');
+		chess.pick('e4');
+		await chess.run('new');
+		const reply = await chess.run('d4');
+		expect(reply?.message).toBeUndefined();
+		await settled(() => /1\. d4 \S+/.test(chess.pane()) && isIdle());
+	});
+
+	it('lets the engine move first in a save left on its turn', async () => {
+		const file = defaultGameFile();
+		mkdirSync(dirname(file), {recursive: true});
+		writeFileSync(
+			file,
+			JSON.stringify({
+				fens: [
+					'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1',
+					'rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq e3 0 1',
+				],
+				sanLog: ['e4'],
+				player: 'w',
+				level: 99,
+				resigned: false,
+			}),
+		);
+		const loaded = loadChess({hasPane: true});
+		const reply = await loaded.run('e5');
+		expect(reply?.message).toContain('engine is to move');
+		await settled(() => loaded.status().includes('your move'));
+		expect(loaded.pane()).not.toContain('Level 99');
 	});
 });

@@ -418,7 +418,10 @@ function reachablePositions(params: {
 	history: readonly Position[];
 }): string[] {
 	const {position, history} = params;
-	const earlier = history.slice(0, -1).slice(-position.halfmove);
+	const earlier =
+		position.halfmove === 0
+			? []
+			: history.slice(0, -1).slice(-position.halfmove);
 	return [...earlier, position].map(repetitionKey);
 }
 

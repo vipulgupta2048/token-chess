@@ -95,9 +95,9 @@ function matchCoordinates(params: {
 	moves: readonly Move[];
 	typed: string;
 }): Move | undefined {
-	const parts = /^([kqrbn])?([a-h][1-8])x?([a-h][1-8])=?([qrbn])?$/.exec(
-		params.typed.toLowerCase(),
-	);
+	const parts = params.typed
+		.toLowerCase()
+		.match(/^([kqrbn])?([a-h][1-8])x?([a-h][1-8])=?([qrbn])?$/);
 	if (!parts) return undefined;
 	const [, kind, from, to, promotion] = parts;
 	const uci = `${from}${to}${promotion ?? ''}`;
@@ -123,10 +123,13 @@ function matchMove(position: Position, typed: string): Move | undefined {
 	return undefined;
 }
 
-// A promotion with no piece named (`e8`, `e7e8`) makes a queen.
+// A promotion with no piece named (`e8`, `e7e8`, `bxa8`) makes a queen. Only a
+// pawn move gets that reading: `Bxa8` stays a bishop move.
 export function parseMove(position: Position, text: string): Move | undefined {
 	const typed = compact(text);
-	return matchMove(position, typed) ?? matchMove(position, `${typed}q`);
+	const exact = matchMove(position, typed);
+	if (exact || !/^[a-h]/.test(typed)) return exact;
+	return matchMove(position, `${typed}q`);
 }
 
 const PIECE_NAMES: Readonly<Record<string, string>> = {
@@ -176,7 +179,7 @@ export function explainIllegal(position: Position, text: string): string {
 	const allMoves = moves.map(move => toSan(position, move));
 	if (castlingSan(typed))
 		return `${check}${text} isn't legal: you can't castle that way now.`;
-	const coordinates = /^[kqrbn]?([a-h][1-8])x?([a-h][1-8])/i.exec(typed);
+	const coordinates = typed.match(/^[kqrbn]?([a-h][1-8])x?([a-h][1-8])/i);
 	if (coordinates) {
 		const reason = explainFromSquare({
 			position,
@@ -185,7 +188,7 @@ export function explainIllegal(position: Position, text: string): string {
 		});
 		return `${check}${text} isn't legal: ${reason}`;
 	}
-	const target = /([a-h][1-8])(=?[qrbn])?$/i.exec(typed)?.[1]?.toLowerCase();
+	const target = typed.match(/([a-h][1-8])(=?[qrbn])?$/i)?.[1]?.toLowerCase();
 	if (!target)
 		return `${text} isn't a move. Legal moves: ${allMoves.join(' ')}`;
 	const kind = namedKind(typed);

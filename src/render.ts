@@ -30,7 +30,7 @@ const INK = '\x1b[38;5;16m';
 const RESET_FOREGROUND = '\x1b[39m';
 
 // Keyed by FEN letter: uppercase is white.
-const GLYPHS: Readonly<Record<string, string>> = {
+export const GLYPHS: Readonly<Record<string, string>> = {
 	K: '♔',
 	Q: '♕',
 	R: '♖',
@@ -47,7 +47,7 @@ const GLYPHS: Readonly<Record<string, string>> = {
 
 // Rank label, a space, then eight squares of three columns.
 const BOARD_WIDTH = 27;
-const COLUMN_GAP = '  ';
+const COLUMN_GAP = '     ';
 const MIN_SIDE_WIDTH = 16;
 
 const FORWARD: readonly number[] = [0, 1, 2, 3, 4, 5, 6, 7];
@@ -125,10 +125,21 @@ export function renderPanel(params: {
 	const board = boardLines(view);
 	if (width - BOARD_WIDTH - COLUMN_GAP.length < MIN_SIDE_WIDTH)
 		return [...board, ...side];
+	const room = width - BOARD_WIDTH - COLUMN_GAP.length;
 	return board.map((line, index) => {
 		const beside = side[index];
-		return beside ? `${line}${COLUMN_GAP}${beside}` : line;
+		return beside ? `${line}${COLUMN_GAP}${fitWidth(beside, room)}` : line;
 	});
+}
+
+// biome-ignore lint/suspicious/noControlCharactersInRegex: matches ANSI codes
+const ANSI = /\x1b\[[0-9;]*m/g;
+
+// A line cut to `width` columns with an ellipsis. A cut line loses its style.
+function fitWidth(line: string, width: number): string {
+	const plain = line.replace(ANSI, '');
+	if ([...plain].length <= width) return line;
+	return `${[...plain].slice(0, Math.max(0, width - 1)).join('')}…`;
 }
 
 // Greedy word wrap for plain text, so a long message stays inside a pane.
