@@ -1,7 +1,7 @@
 {
-	"name": "cmd-mod-token-chess",
-	"version": "0.1.0",
-	"description": "Play chess against a built-in engine in a pane beside your Command Code prompt while the agent works. Arrow-key moves, zero dependencies.",
+	"name": "cmd-mod-llmchess",
+	"version": "0.2.0",
+	"description": "Play chess against your Command Code session LLM, or a built-in engine, in a pane beside the prompt while the agent works. Arrow-key moves, zero dependencies.",
 	"type": "module",
 	"license": "MIT",
 	"author": {
@@ -19,6 +19,7 @@
 		"cmd-mod-command",
 		"cmd-mod-renderer",
 		"chess",
+		"llm",
 		"terminal",
 		"game",
 		"commandcode"

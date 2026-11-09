@@ -5,13 +5,14 @@ import {mkdirSync, mkdtempSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {dirname, join} from 'node:path';
 import {beforeEach, describe, expect, it, vi} from 'vitest';
-import tokenChess from './index.js';
-import {defaultGameFile} from './src/store.js';
+import llmChess from './index.js';
+import {defaultGameFile, legacyGameFile} from './src/store.js';
 import type {
 	InputElement,
 	ModApi,
 	ModCommand,
 	ModCommandResult,
+	ModModelCompleteResult,
 	ModPane,
 	SelectElement,
 } from './src/mod-api.js';
@@ -31,6 +32,10 @@ interface Stub {
 	readonly picks: () => readonly string[];
 	readonly hasInput: () => boolean;
 	readonly copied: () => readonly string[];
+	// Answers the stub model gives, in order; after them it is unavailable.
+	// 'hold' answers only when the call is aborted.
+	readonly answer: (...answers: (ModModelCompleteResult | 'hold')[]) => void;
+	readonly asked: () => readonly {prompt: string; signal?: AbortSignal}[];
 }
 
 function loadChess(options: {hasPane: boolean} = {hasPane: false}): Stub {
@@ -42,6 +47,8 @@ function loadChess(options: {hasPane: boolean} = {hasPane: false}): Stub {
 	let pane: ModPane | undefined;
 	const opened: {id: string; focus: boolean}[] = [];
 	const copied: string[] = [];
+	const answers: (ModModelCompleteResult | 'hold')[] = [];
+	const asked: {prompt: string; signal?: AbortSignal}[] = [];
 	const disposable = {dispose: (): void => {}};
 	const cmd: ModApi = {
 		ui: {
@@ -70,6 +77,19 @@ function loadChess(options: {hasPane: boolean} = {hasPane: false}): Stub {
 			command = registered;
 			return disposable;
 		},
+		model: {
+			complete: async params => {
+				asked.push(params);
+				const next = answers.shift();
+				if (next !== 'hold')
+					return next ?? {isAnswered: false, reason: 'unavailable'};
+				return new Promise(resolve => {
+					params.signal?.addEventListener('abort', () =>
+						resolve({isAnswered: false, reason: 'aborted'}),
+					);
+				});
+			},
+		},
 		addShortcut: () => disposable,
 		addRenderer: (type, render) => {
 			renderers.set(type, render);
@@ -80,7 +100,7 @@ function loadChess(options: {hasPane: boolean} = {hasPane: false}): Stub {
 			feed.push(lines.map(stripAnsi).join('\n'));
 		},
 	};
-	tokenChess(cmd);
+	llmChess(cmd);
 	const nodes = () => pane?.render({width: 80}) ?? [];
 	const select = (): SelectElement | undefined =>
 		nodes().find(
@@ -88,13 +108,24 @@ function loadChess(options: {hasPane: boolean} = {hasPane: false}): Stub {
 				typeof node === 'object' && node.type === 'select',
 		);
 	return {
+		// Pages through `more ›` like a player would, to find the option.
 		pick: label => {
-			const option = select()?.options.find(item => item.label === label);
-			if (!option) throw new Error(`no option ${label}`);
-			select()?.onSelect(option.value);
+			for (let page = 0; page < 5; page++) {
+				const options = select()?.options ?? [];
+				const option = options.find(item => item.label === label);
+				if (option) return select()?.onSelect(option.value);
+				const more = options.find(item => item.label === 'more ›');
+				if (!more) break;
+				select()?.onSelect(more.value);
+			}
+			throw new Error(`no option ${label}`);
 		},
 		picks: () => select()?.options.map(item => item.label) ?? [],
 		copied: () => copied,
+		answer: (...more) => {
+			answers.push(...more);
+		},
+		asked: () => asked,
 		hasInput: () =>
 			nodes().some(node => typeof node === 'object' && node.type === 'input'),
 		run: async args => command?.handler({args}),
@@ -123,7 +154,7 @@ async function settled(check: () => boolean): Promise<void> {
 	});
 }
 
-describe('token-chess mod', () => {
+describe('LLMChess mod', () => {
 	let chess: Stub;
 	beforeEach(() => {
 		vi.stubEnv('HOME', mkdtempSync(join(tmpdir(), 'token-chess-home-')));
@@ -172,7 +203,7 @@ describe('token-chess mod', () => {
 	});
 });
 
-describe('token-chess mod in a pane', () => {
+describe('LLMChess mod in a pane', () => {
 	let chess: Stub;
 	const isIdle = () => chess.status().includes('your move');
 	beforeEach(() => {
@@ -221,7 +252,7 @@ describe('token-chess mod in a pane', () => {
 	it('shows your move and Thinking… before the engine answers', () => {
 		chess.pick('e2');
 		chess.pick('e4');
-		expect(chess.pane()).toContain('Thinking…');
+		expect(chess.pane()).toContain('is thinking…');
 		expect(chess.pane()).toContain('1. e4');
 	});
 
@@ -332,6 +363,7 @@ describe('token-chess mod in a pane', () => {
 	});
 
 	it('frees the board when a new game replaces one mid-search', async () => {
+		await chess.run('vs engine');
 		await chess.run('level 5');
 		chess.pick('e2');
 		chess.pick('e4');
@@ -359,8 +391,110 @@ describe('token-chess mod in a pane', () => {
 		);
 		const loaded = loadChess({hasPane: true});
 		const reply = await loaded.run('e5');
-		expect(reply?.message).toContain('engine is to move');
+		expect(reply?.message).toContain('opponent is to move');
 		await settled(() => loaded.status().includes('your move'));
 		expect(loaded.pane()).not.toContain('Level 99');
+	});
+});
+
+describe('LLMChess against the session LLM', () => {
+	let chess: Stub;
+	const isIdle = () => chess.status().includes('your move');
+	const said = (text: string): ModModelCompleteResult => ({
+		isAnswered: true,
+		text,
+		model: 'test-model',
+	});
+	beforeEach(() => {
+		vi.stubEnv('HOME', mkdtempSync(join(tmpdir(), 'llmchess-home-')));
+		chess = loadChess({hasPane: true});
+	});
+
+	it('plays the LLM by default and shows its move, remark and name', async () => {
+		chess.answer(said('**e5**\nYour move, human.'));
+		chess.pick('e2');
+		chess.pick('e4');
+		await settled(() => /1\. e4 e5/.test(chess.pane()) && isIdle());
+		expect(chess.pane()).toContain('LLM: "Your move, human."');
+		expect(chess.pane()).toContain('vs test-model');
+		expect(chess.asked()[0]?.prompt).toContain('You play black.');
+		expect(chess.asked()[0]?.prompt).toContain('Legal moves:');
+	});
+
+	it('asks again once after an illegal answer', async () => {
+		chess.answer(said('Ke2'), said('Nf6'));
+		chess.pick('e2');
+		chess.pick('e4');
+		await settled(() => /1\. e4 Nf6/.test(chess.pane()) && isIdle());
+		expect(chess.asked()).toHaveLength(2);
+		expect(chess.asked()[1]?.prompt).toContain('not one of the legal moves');
+	});
+
+	it('lets the engine play when the LLM fails twice, and says so', async () => {
+		chess.answer(said('Ke2'), said('resign?'));
+		chess.pick('e2');
+		chess.pick('e4');
+		await settled(() => /1\. e4 \S+/.test(chess.pane()) && isIdle());
+		expect(chess.pane()).toContain("didn't answer with a legal move");
+	});
+
+	it('lets the engine play when the model is unavailable', async () => {
+		chess.pick('e2');
+		chess.pick('e4');
+		await settled(() => /1\. e4 \S+/.test(chess.pane()) && isIdle());
+		expect(chess.pane()).toContain("model isn't available");
+	});
+
+	it('switches to the engine and back without a new game', async () => {
+		const reply = await chess.run('vs engine');
+		expect(reply?.message).toContain('Now playing the engine');
+		await chess.run('e4');
+		await settled(() => /1\. e4 \S+/.test(chess.pane()) && isIdle());
+		expect(chess.asked()).toHaveLength(0);
+		expect(chess.pane()).toContain('vs engine, level 3');
+		chess.pick('≡ menu');
+		chess.pick('vs Engine');
+		chess.pick('Your session LLM');
+		await settled(() => chess.pane().includes("Now playing your session's LLM"));
+	});
+
+	it('cancels the LLM call when a new game replaces the board', async () => {
+		chess.answer('hold');
+		chess.pick('e2');
+		chess.pick('e4');
+		expect(chess.pane()).toContain('LLM is thinking…');
+		await chess.run('new engine');
+		expect(chess.asked()[0]?.signal?.aborted).toBe(true);
+		const reply = await chess.run('d4');
+		expect(reply?.message).toBeUndefined();
+		await settled(() => /1\. d4 \S+/.test(chess.pane()) && isIdle());
+	});
+
+	it('starts a game as black against the LLM, which opens', async () => {
+		chess.answer(said('d4\nLet us begin.'));
+		await chess.run('new black');
+		await settled(() => /1\. d4/.test(chess.pane()) && isIdle());
+		expect(chess.asked()[0]?.prompt).toContain('You play white.');
+		expect(chess.asked()[0]?.prompt).toContain('none, you move first');
+	});
+
+	it('keeps a game saved before the LLM opponent on the engine', async () => {
+		const file = legacyGameFile();
+		mkdirSync(dirname(file), {recursive: true});
+		writeFileSync(
+			file,
+			JSON.stringify({
+				fens: ['rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1'],
+				sanLog: [],
+				player: 'w',
+				level: 2,
+				resigned: false,
+			}),
+		);
+		const loaded = loadChess({hasPane: true});
+		await loaded.run('e4');
+		await settled(() => /1\. e4 \S+/.test(loaded.pane()));
+		expect(loaded.pane()).toContain('vs engine, level 2');
+		expect(loaded.asked()).toHaveLength(0);
 	});
 });

@@ -156,9 +156,13 @@ describe('captures and PGN', () => {
 
 	it('writes a PGN any chess site reads', () => {
 		const game = play(newGame({player: 'b', level: 2}), ['f3', 'e5', 'g4', 'Qh4#']);
-		const pgn = toPgn(game, new Date('2026-11-09T12:00:00Z'));
+		const pgn = toPgn({
+			game,
+			date: new Date('2026-11-09T12:00:00Z'),
+			rival: 'test-model',
+		});
 		expect(pgn).toContain('[Date "2026.11.09"]');
-		expect(pgn).toContain('[White "token-chess level 2"]');
+		expect(pgn).toContain('[White "test-model"]');
 		expect(pgn).toContain('[Black "You"]');
 		expect(pgn).toContain('[Result "0-1"]');
 		expect(pgn.trim().endsWith('1. f3 e5 2. g4 Qh4# 0-1')).toBe(true);

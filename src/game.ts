@@ -15,11 +15,15 @@ import {
 } from './position.js';
 import {toSan} from './san.js';
 
+// Who answers the player: the session's model, or the built-in engine.
+export type Opponent = 'llm' | 'engine';
+
 export interface Game {
 	readonly positions: readonly Position[];
 	readonly sanLog: readonly string[];
 	readonly player: Color;
 	readonly level: number;
+	readonly opponent: Opponent;
 	readonly resigned: boolean;
 }
 
@@ -36,22 +40,27 @@ export type Outcome =
 				| 'insufficient material';
 	  };
 
-export function newGame(params: {player: Color; level: number}): Game {
+export function newGame(params: {
+	player: Color;
+	level: number;
+	opponent?: Opponent;
+}): Game {
 	const start = parseFen(START_FEN);
 	if (!start)
-		throw new Error('token-chess: the start position failed to parse');
+		throw new Error('LLMChess: the start position failed to parse');
 	return {
 		positions: [start],
 		sanLog: [],
 		player: params.player,
 		level: params.level,
+		opponent: params.opponent ?? 'llm',
 		resigned: false,
 	};
 }
 
 export function currentPosition(game: Game): Position {
 	const position = game.positions[game.positions.length - 1];
-	if (!position) throw new Error('token-chess: a game has no positions');
+	if (!position) throw new Error('LLMChess: a game has no positions');
 	return position;
 }
 
@@ -188,18 +197,23 @@ function pgnResult(game: Game): string {
 }
 
 // The game as PGN, for pasting into any chess site or app to replay it.
-export function toPgn(game: Game, date: Date): string {
-	const engine = `token-chess level ${game.level}`;
+// `rival` names whoever played against you.
+export function toPgn(params: {
+	game: Game;
+	date: Date;
+	rival: string;
+}): string {
+	const {game, date, rival} = params;
 	const result = pgnResult(game);
 	const day = date.toISOString().slice(0, 10).replace(/-/g, '.');
 	const first = game.positions[0];
 	const fen = first ? toFen(first) : START_FEN;
 	const headers = [
-		['Event', 'token-chess'],
+		['Event', 'LLMChess'],
 		['Site', 'Command Code'],
 		['Date', day],
-		['White', game.player === 'w' ? 'You' : engine],
-		['Black', game.player === 'b' ? 'You' : engine],
+		['White', game.player === 'w' ? 'You' : rival],
+		['Black', game.player === 'b' ? 'You' : rival],
 		['Result', result],
 		...(fen === START_FEN ? [] : [['SetUp', '1'], ['FEN', fen]]),
 	];
@@ -222,6 +236,9 @@ export interface SavedGame {
 	readonly sanLog: readonly string[];
 	readonly player: Color;
 	readonly level: number;
+	// Absent in saves from before the LLM opponent: those games stay on the
+	// engine they started with.
+	readonly opponent?: Opponent;
 	readonly resigned: boolean;
 }
 
@@ -231,6 +248,7 @@ export function toSaved(game: Game): SavedGame {
 		sanLog: game.sanLog,
 		player: game.player,
 		level: game.level,
+		opponent: game.opponent,
 		resigned: game.resigned,
 	};
 }
@@ -244,6 +262,7 @@ export function fromSaved(saved: SavedGame): Game | undefined {
 		sanLog: saved.sanLog,
 		player: saved.player,
 		level: isLevel(saved.level) ? saved.level : DEFAULT_LEVEL,
+		opponent: saved.opponent === 'llm' ? 'llm' : 'engine',
 		resigned: saved.resigned,
 	};
 }

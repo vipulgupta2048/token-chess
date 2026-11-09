@@ -1,5 +1,6 @@
 // The game in progress survives `/reload` and new sessions in one small JSON
-// file. A missing, unreadable or malformed file just means no game yet.
+// file. A missing, unreadable or malformed file just means no game yet. A game
+// saved under the mod's old name, token-chess, is picked up once.
 
 import {mkdirSync, readFileSync, writeFileSync} from 'node:fs';
 import {homedir} from 'node:os';
@@ -7,6 +8,10 @@ import {dirname, join} from 'node:path';
 import {fromSaved, type Game, type SavedGame, toSaved} from './game.js';
 
 export function defaultGameFile(): string {
+	return join(homedir(), '.commandcode', 'llmchess', 'game.json');
+}
+
+export function legacyGameFile(): string {
 	return join(homedir(), '.commandcode', 'token-chess', 'game.json');
 }
 
@@ -23,6 +28,9 @@ function isSavedGame(value: unknown): value is SavedGame {
 		return false;
 	if (saved.player !== 'w' && saved.player !== 'b') return false;
 	if (typeof saved.level !== 'number') return false;
+	const opponent = saved.opponent;
+	if (opponent !== undefined && opponent !== 'llm' && opponent !== 'engine')
+		return false;
 	return typeof saved.resigned === 'boolean';
 }
 

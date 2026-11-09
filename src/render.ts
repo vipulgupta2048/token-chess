@@ -95,7 +95,7 @@ function rankLine(params: {
 // The eight ranks and the file letters.
 function boardLines(view: BoardView): readonly string[] {
 	const position = parseFen(view.fen);
-	if (!position) return [`token-chess: unreadable position ${view.fen}`];
+	if (!position) return [`LLMChess: unreadable position ${view.fen}`];
 	const order = screenOrder(view.player);
 	const files = order.map(col => ` ${squareName(squareAt(7, col))[0]} `);
 	return [

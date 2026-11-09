@@ -67,6 +67,22 @@ export interface ModUi {
 	): Promise<{readonly isCopied: boolean; readonly reason?: string}>;
 }
 
+export type ModModelCompleteResult =
+	| {readonly isAnswered: true; readonly text: string; readonly model: string}
+	| {
+			readonly isAnswered: false;
+			readonly reason: 'unavailable' | 'error' | 'aborted';
+	  };
+
+export interface ModModel {
+	complete(params: {
+		prompt: string;
+		system?: string;
+		maxOutputTokens?: number;
+		signal?: AbortSignal;
+	}): Promise<ModModelCompleteResult>;
+}
+
 export interface ModShortcut {
 	readonly description?: string;
 	readonly handler: () => void;
@@ -74,6 +90,8 @@ export interface ModShortcut {
 
 export interface ModApi {
 	readonly ui: ModUi;
+	// Absent on hosts older than mod model calls.
+	readonly model?: ModModel;
 	hooks(hooks: ModHooks): Disposable;
 	on(event: 'run_start' | 'run_end', handler: () => void): Disposable;
 	addCommand(command: ModCommand): Disposable;
