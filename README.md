@@ -31,26 +31,28 @@ board opens with one control under it, driven by ←/→ and Enter:
 1. Choose a piece.
 2. Choose its square. Dots mark where it can go, and captures light up.
 
-The LLM replies, sometimes with a one-line remark under the headline. Undo,
-New game, the opponent, the engine level, Resign, Type a move and Copy PGN are
-under `≡ menu` at the end of the list. Beside the board are your last few
-moves, the pieces each side has taken, who is ahead, and who you are playing.
+The LLM replies, sometimes with a one-line remark under the headline. New
+game, Settings and Resign are under `≡ menu` at the end of the list. When the
+pieces don't fit on one line, `more ›` at the end shows the next ones.
+
+`/chess settings` picks who you play in one step: your session LLM, or the
+built-in engine at level 1 to 5.
 
 Esc hands the keyboard back to the prompt, and `/chess`, Alt+C or Alt+↑
 returns to the board. Alt+0 closes it.
 
-Everything also works from the prompt, or in Type a move:
+Everything also works from the prompt:
 
-| After `/chess`, or typed in the pane | What it does |
+| Command | What it does |
 |---|---|
 | `e4`, `Nf3`, `exd5`, `O-O`, `e8=Q` | Play a move in SAN |
 | `e2e4`, `e2 e4`, `e2-e4`, `Ng1f3` | The same by squares. Case doesn't matter, `oo` castles, and a promotion with no piece makes a queen |
 | `new [black] [engine]` | New game. You play white against your session LLM unless you say otherwise |
+| `settings` | Pick your opponent: your session LLM, or the engine at a level |
 | `vs llm`, `vs engine` | Switch who plays against you, mid-game too |
 | `undo` | Take back your last move and the reply |
 | `level <1-5>` | Engine strength, default 3. It is also how strong the LLM's stand-in is |
 | `resign` | Give up the current game |
-| `pgn` | Copy the game as PGN, to replay or analyse on any chess site |
 | `help` | The list above |
 
 An illegal move is answered in terms of the piece you named: `Nd5` gets "no
@@ -74,6 +76,8 @@ moves, and asks for one move back, plus an optional remark of a dozen words.
   your session. Switch to the engine with `/chess vs engine` to play for free.
 - **It plays like an LLM.** Expect personality more than precision. The
   built-in engine at level 3 or more is usually the stronger player.
+- **Switch any time.** `/chess settings` or `/chess vs engine` hands the
+  current game to the engine, and `/chess vs llm` hands it back.
 
 Games saved before LLMChess had an LLM opponent keep playing the engine.
 
@@ -92,14 +96,13 @@ agent is working, so it lives in a pane beside your prompt instead.
 | Opponent | Your session LLM, or a built-in engine with 5 levels | Stockfish or another UCI engine, Lichess |
 | Moves | ←/→ and Enter, or typed SAN and squares | Cursor, mouse, or typed |
 | Legal-move hints | Dots and lit captures after picking a piece | Most |
-| Captured pieces, PGN | Yes | Varies |
 | Install | One `cmd mods add` | Cargo, Go, pip or a package manager |
 
 ## What it can reach
 
 Your session's model, one call per LLM move. `cmd mods inspect` also reports
-the clipboard, for Copy PGN, and the filesystem, for the saved game. Nothing
-else: no network of its own, no processes, no hooks on the agent's work.
+the filesystem, for the saved game. Nothing else: no network of its own, no
+processes, no hooks on the agent's work.
 
 ## How it fits the mod API
 
@@ -112,7 +115,7 @@ else: no network of its own, no processes, no hooks on the agent's work.
 | Keep the game visible | `cmd.ui.setStatus`, one footer segment: `♙ LLMChess · your move · last Nf6` |
 | Offer a game while you wait | `cmd.on('run_start')` sets `♙ /chess to play while you wait` when no game is going |
 | Resume a saved game | `cmd.hooks({onSessionStart})` |
-| Copy the game | `cmd.ui.copy`, with the PGN shown instead where nothing can copy |
+| Pick the opponent | `cmd.ui.select`, Command Code's own dialog, from `/chess settings` |
 
 ## The built-in engine
 
@@ -144,8 +147,12 @@ check, en passant pins, promotions, discovered checks).
 - **A cursor on the board.** Mod shortcuts need Ctrl or Alt, a pane only takes
   buttons, inputs and selects, and a select doesn't report its highlight until
   Enter, so the picker can't preview a piece before you choose it.
-- **The pane's key hints.** Command Code draws "Tab to move" under every focused
-  pane. Tab does nothing here, since the pane has one control.
+- **The pane's key hints.** Command Code draws "Mod pane focused · Tab to
+  move…" under every focused pane, and no mod can hide it. Tab does nothing
+  here, since the pane has one control.
+- **Scrolling the picker.** A pane's select wraps ←/→ inside the options it
+  shows and tells the mod nothing until Enter, so long lists page with
+  `more ›` instead of scrolling as you move.
 - **The desktop app.** It draws panes, but can't focus a select and drops the
   board's colors, so play in the terminal.
 

@@ -14,7 +14,7 @@ export type Action =
 	| {readonly kind: 'opponent'; readonly opponent: Opponent}
 	| {readonly kind: 'undo'}
 	| {readonly kind: 'resign'}
-	| {readonly kind: 'pgn'}
+	| {readonly kind: 'settings'}
 	| {readonly kind: 'level'; readonly level: number}
 	| {readonly kind: 'move'; readonly text: string}
 	| {readonly kind: 'invalid'; readonly message: string};
@@ -23,15 +23,12 @@ export const MAX_LEVEL = 5;
 export const DEFAULT_LEVEL = 3;
 
 export const HELP = [
-	'/chess              show the board and start typing moves in it',
-	'/chess <move>       play a move: e4, Nf3, exd5, O-O, e8=Q or e2 e4',
-	'/chess new [black] [engine]  new game: white against your session LLM',
-	'                    unless you say black, or engine for the built-in one',
-	'/chess vs <llm|engine>  switch who plays against you, mid-game too',
+	'/chess              open the board: ←/→ then Enter to move',
+	'/chess <move>       play a move from the prompt: e4, Nf3, O-O, e2 e4',
+	'/chess new [black]  new game, as white unless you say black',
+	'/chess settings     pick your opponent: your session LLM or the engine',
 	'/chess undo         take back your last move and the reply',
-	`/chess level <1-${MAX_LEVEL}>  engine strength (default 3), also the LLM's fallback`,
 	'/chess resign       give up the current game',
-	'/chess pgn          copy the game as PGN',
 ].join('\n');
 
 function parsePlayer(word: string): Color | undefined {
@@ -80,7 +77,8 @@ export function parseAction(args: string): Action {
 	if (word === 'help') return {kind: 'help'};
 	if (word === 'undo' || word === 'takeback') return {kind: 'undo'};
 	if (word === 'resign') return {kind: 'resign'};
-	if (word === 'pgn') return {kind: 'pgn'};
+	if (word === 'settings' || word === 'menu' || word === 'config')
+		return {kind: 'settings'};
 	if (word === 'level') return parseLevel(second);
 	if (word === 'new') return parseNew(words.slice(1));
 	if (word !== 'vs') return {kind: 'move', text: args.trim()};

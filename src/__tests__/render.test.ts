@@ -3,7 +3,7 @@ import {START_FEN} from '../position.js';
 import {
 	type BoardView,
 	renderBoard,
-	renderPanel,
+	renderBoardLines,
 	wrapText,
 } from '../render.js';
 
@@ -42,30 +42,12 @@ describe('renderBoard', () => {
 	});
 });
 
-describe('renderPanel', () => {
-	const side = ['1. e4 e5', 'Level 3'];
-
-	it('puts the side lines beside the board when there is room', () => {
-		const lines = renderPanel({view, side, width: 60}).map(plain);
+describe('renderBoardLines', () => {
+	it('draws only the ranks and files, nothing beside them', () => {
+		const lines = renderBoardLines(view).map(plain);
 		expect(lines).toHaveLength(9);
-		expect(lines[0]).toMatch(/^ 8 .*1\. e4 e5$/);
-		expect(lines[2]).toMatch(/^ 6 /);
-	});
-
-	it('cuts a side line that would run past the pane', () => {
-		const lines = renderPanel({
-			view,
-			side: ['100. exd8=Q+ exd8=Q+'],
-			width: 50,
-		}).map(plain);
-		expect(lines[0]?.length).toBeLessThanOrEqual(50);
-		expect(lines[0]).toContain('…');
-	});
-
-	it('stacks them under the board in a narrow pane', () => {
-		const lines = renderPanel({view, side, width: 40}).map(plain);
-		expect(lines).toHaveLength(11);
-		expect(lines[9]).toBe('1. e4 e5');
+		expect(lines[0]).toMatch(/^ 8 /);
+		expect(lines[8]?.trim()).toBe('a  b  c  d  e  f  g  h');
 	});
 });
 

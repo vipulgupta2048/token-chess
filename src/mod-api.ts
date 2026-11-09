@@ -28,14 +28,6 @@ export interface ModHooks {
 	readonly onSessionStart?: () => void;
 }
 
-export interface InputElement {
-	readonly type: 'input';
-	readonly key: string;
-	readonly placeholder?: string;
-	readonly value?: string;
-	readonly onSubmit: (text: string) => void;
-}
-
 export interface SelectElement {
 	readonly type: 'select';
 	readonly key: string;
@@ -47,7 +39,7 @@ export interface SelectElement {
 	readonly onSelect: (value: string) => void;
 }
 
-export type PaneNode = string | InputElement | SelectElement;
+export type PaneNode = string | SelectElement;
 
 export interface ModPane {
 	readonly id: string;
@@ -62,9 +54,10 @@ export interface ModUi {
 	pane(pane: ModPane): Disposable;
 	openPane(id: string, options?: {focus?: boolean}): void;
 	refreshWidgets(): void;
-	copy(
-		text: string,
-	): Promise<{readonly isCopied: boolean; readonly reason?: string}>;
+	select(params: {
+		title: string;
+		options: readonly {label: string; description?: string}[];
+	}): Promise<string | undefined>;
 }
 
 export type ModModelCompleteResult =

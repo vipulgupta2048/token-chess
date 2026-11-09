@@ -30,7 +30,7 @@ const INK = '\x1b[38;5;16m';
 const RESET_FOREGROUND = '\x1b[39m';
 
 // Keyed by FEN letter: uppercase is white.
-export const GLYPHS: Readonly<Record<string, string>> = {
+const GLYPHS: Readonly<Record<string, string>> = {
 	K: '♔',
 	Q: '♕',
 	R: '♖',
@@ -45,10 +45,6 @@ export const GLYPHS: Readonly<Record<string, string>> = {
 	p: '♟︎',
 };
 
-// Rank label, a space, then eight squares of three columns.
-const BOARD_WIDTH = 27;
-const COLUMN_GAP = '     ';
-const MIN_SIDE_WIDTH = 16;
 
 const FORWARD: readonly number[] = [0, 1, 2, 3, 4, 5, 6, 7];
 const BACKWARD: readonly number[] = [7, 6, 5, 4, 3, 2, 1, 0];
@@ -92,8 +88,8 @@ function rankLine(params: {
 	return ` ${DIM}${8 - row}${RESET} ${cells.join('')}`;
 }
 
-// The eight ranks and the file letters.
-function boardLines(view: BoardView): readonly string[] {
+// The eight ranks and the file letters: the pane's form.
+export function renderBoardLines(view: BoardView): readonly string[] {
 	const position = parseFen(view.fen);
 	if (!position) return [`LLMChess: unreadable position ${view.fen}`];
 	const order = screenOrder(view.player);
@@ -108,38 +104,10 @@ function boardLines(view: BoardView): readonly string[] {
 export function renderBoard(view: BoardView): readonly string[] {
 	return [
 		view.heading,
-		...boardLines(view),
+		...renderBoardLines(view),
 		'',
 		...view.notes.map(note => ` ${note}`),
 	];
-}
-
-// The pane's form: the board with `side` beside it, or below it when the pane
-// is too narrow for both. Side lines are short, styled, and never wrap.
-export function renderPanel(params: {
-	view: BoardView;
-	side: readonly string[];
-	width: number;
-}): readonly string[] {
-	const {view, side, width} = params;
-	const board = boardLines(view);
-	if (width - BOARD_WIDTH - COLUMN_GAP.length < MIN_SIDE_WIDTH)
-		return [...board, ...side];
-	const room = width - BOARD_WIDTH - COLUMN_GAP.length;
-	return board.map((line, index) => {
-		const beside = side[index];
-		return beside ? `${line}${COLUMN_GAP}${fitWidth(beside, room)}` : line;
-	});
-}
-
-// biome-ignore lint/suspicious/noControlCharactersInRegex: matches ANSI codes
-const ANSI = /\x1b\[[0-9;]*m/g;
-
-// A line cut to `width` columns with an ellipsis. A cut line loses its style.
-function fitWidth(line: string, width: number): string {
-	const plain = line.replace(ANSI, '');
-	if ([...plain].length <= width) return line;
-	return `${[...plain].slice(0, Math.max(0, width - 1)).join('')}…`;
 }
 
 // Greedy word wrap for plain text, so a long message stays inside a pane.

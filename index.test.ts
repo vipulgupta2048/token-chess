@@ -1,14 +1,13 @@
 // Drives the mod through a stub of the Command Code mod API: the same calls
 // the host makes, with the feed and footer captured as plain text.
 
-import {mkdirSync, mkdtempSync, writeFileSync} from 'node:fs';
+import {mkdirSync, mkdtempSync, readFileSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {dirname, join} from 'node:path';
 import {beforeEach, describe, expect, it, vi} from 'vitest';
 import llmChess from './index.js';
 import {defaultGameFile, legacyGameFile} from './src/store.js';
 import type {
-	InputElement,
 	ModApi,
 	ModCommand,
 	ModCommandResult,
@@ -27,11 +26,13 @@ interface Stub {
 	readonly commands: string[];
 	readonly opened: {id: string; focus: boolean}[];
 	readonly pane: () => string;
-	readonly type: (text: string) => void;
 	readonly pick: (label: string) => void;
 	readonly picks: () => readonly string[];
-	readonly hasInput: () => boolean;
-	readonly copied: () => readonly string[];
+	// Labels the settings dialog showed, and what the person picks in it next.
+	readonly dialogs: () => readonly string[][];
+	// The moves of the game so far, as the save file has them.
+	readonly sans: () => string;
+	readonly choose: (label: string | undefined) => void;
 	// Answers the stub model gives, in order; after them it is unavailable.
 	// 'hold' answers only when the call is aborted.
 	readonly answer: (...answers: (ModModelCompleteResult | 'hold')[]) => void;
@@ -46,7 +47,8 @@ function loadChess(options: {hasPane: boolean} = {hasPane: false}): Stub {
 	let command: ModCommand | undefined;
 	let pane: ModPane | undefined;
 	const opened: {id: string; focus: boolean}[] = [];
-	const copied: string[] = [];
+	const dialogs: string[][] = [];
+	const picked: (string | undefined)[] = [];
 	const answers: (ModModelCompleteResult | 'hold')[] = [];
 	const asked: {prompt: string; signal?: AbortSignal}[] = [];
 	const disposable = {dispose: (): void => {}};
@@ -65,9 +67,9 @@ function loadChess(options: {hasPane: boolean} = {hasPane: false}): Stub {
 				opened.push({id, focus: openOptions?.focus === true});
 			},
 			refreshWidgets: () => {},
-			copy: async text => {
-				copied.push(text);
-				return {isCopied: true};
+			select: async ({options}) => {
+				dialogs.push(options.map(option => option.label));
+				return picked.shift();
 			},
 		},
 		hooks: () => disposable,
@@ -121,13 +123,53 @@ function loadChess(options: {hasPane: boolean} = {hasPane: false}): Stub {
 			throw new Error(`no option ${label}`);
 		},
 		picks: () => select()?.options.map(item => item.label) ?? [],
-		copied: () => copied,
+		dialogs: () => dialogs,
+		sans: () => {
+			try {
+				const saved = JSON.parse(readFileSync(defaultGameFile(), 'utf8'));
+				return (saved.sanLog as string[]).join(' ');
+			} catch {
+				return '';
+			}
+		},
+		choose: label => {
+			picked.push(label);
+		},
 		answer: (...more) => {
 			answers.push(...more);
 		},
 		asked: () => asked,
-		hasInput: () =>
-			nodes().some(node => typeof node === 'object' && node.type === 'input'),
+		run: async args => command?.handler({args}),
+		feed,
+		status: () => stripAnsi(status),
+		commands,
+		opened,
+		pane: () =>
+			nodes()
+				.filter(node => typeof node === 'string')
+				.map(stripAnsi)
+				.join('\n'),
+		// Pages through `more ›` like a player would, to find the option.
+		pick: label => {
+			for (let page = 0; page < 5; page++) {
+				const options = select()?.options ?? [];
+				const option = options.find(item => item.label === label);
+				if (option) return select()?.onSelect(option.value);
+				const more = options.find(item => item.label === 'more ›');
+				if (!more) break;
+				select()?.onSelect(more.value);
+			}
+			throw new Error(`no option ${label}`);
+		},
+		picks: () => select()?.options.map(item => item.label) ?? [],
+		dialogs: () => dialogs,
+		choose: label => {
+			picked.push(label);
+		},
+		answer: (...more) => {
+			answers.push(...more);
+		},
+		asked: () => asked,
 		run: async args => command?.handler({args}),
 		feed,
 		status: () => stripAnsi(status),
@@ -222,7 +264,7 @@ describe('LLMChess mod in a pane', () => {
 		await chess.run('e4');
 		expect(chess.opened).toEqual([{id: 'board', focus: false}]);
 		expect(chess.feed).toHaveLength(0);
-		expect(chess.pane()).toMatch(/1\. e4 \S+/);
+		await settled(() => /^e4 \S+$/.test(chess.sans()));
 	});
 
 	const openTyping = (): void => {
@@ -230,48 +272,24 @@ describe('LLMChess mod in a pane', () => {
 		chess.pick('Type a move');
 	};
 
-	it('shows one control at a time', () => {
+	it('shows one control under the board, and a short menu', () => {
 		expect(chess.picks()).toContain('≡ menu');
-		expect(chess.hasInput()).toBe(false);
-		openTyping();
-		expect(chess.hasInput()).toBe(true);
-		expect(chess.picks()).toEqual([]);
-	});
-
-	it('plays a typed move, stays typing, and an empty Enter leaves', async () => {
-		openTyping();
-		chess.type('e2 e4');
-		await settled(() => /1\. e4 \S+/.test(chess.pane()) && isIdle());
-		expect(chess.pane()).toContain('Black played');
-		expect(chess.hasInput()).toBe(true);
-		chess.type('');
-		expect(chess.hasInput()).toBe(false);
-		expect(chess.pane()).toContain('Choose a piece:');
-	});
-
-	it('shows your move and Thinking… before the engine answers', () => {
-		chess.pick('e2');
-		chess.pick('e4');
-		expect(chess.pane()).toContain('is thinking…');
-		expect(chess.pane()).toContain('1. e4');
-	});
-
-	it('answers an illegal move in the pane, and clears it next time', async () => {
-		openTyping();
-		chess.type('e5');
-		await settled(() => chess.pane().includes('no pawn can reach e5'));
-		chess.type('e4');
-		await settled(() => /1\. e4 \S+/.test(chess.pane()) && isIdle());
-		expect(chess.pane()).not.toContain('no pawn can reach');
-	});
-
-	it('runs the menu: level, then resign after asking', async () => {
 		chess.pick('≡ menu');
-		chess.pick('Level 3');
-		chess.pick('5');
-		await settled(() => chess.pane().includes('Engine level set to 5'));
+		expect(chess.picks()).toEqual([
+			'New game',
+			'Settings',
+			'Resign',
+			'‹ back',
+		]);
+	});
+
+	it('draws nothing beside the board', () => {
+		const rank = chess.pane().split('\n').find(line => line.startsWith(' 8 '));
+		expect(rank?.trimEnd().length).toBeLessThanOrEqual(27);
+	});
+
+	it('resigns from the menu after asking', async () => {
 		chess.pick('≡ menu');
-		expect(chess.picks()).toContain('Level 5');
 		chess.pick('Resign');
 		chess.pick('‹ back');
 		expect(chess.picks()).toContain('Resign');
@@ -280,22 +298,19 @@ describe('LLMChess mod in a pane', () => {
 		await settled(() => chess.pane().includes('resignation'));
 	});
 
-	it('undoes from the menu, and starts a new game as black', async () => {
-		chess.pick('e2');
-		chess.pick('e4');
-		await settled(() => /1\. e4 \S+/.test(chess.pane()) && isIdle());
-		chess.pick('≡ menu');
-		chess.pick('Undo');
-		await settled(() => !chess.pane().includes('1. e4'));
+	it('starts a new game as black from the menu', async () => {
+		await chess.run('vs engine');
 		chess.pick('≡ menu');
 		chess.pick('New game');
 		chess.pick('Black');
-		await settled(() => /1\. \S+/.test(chess.pane()) && isIdle());
+		await settled(() => chess.sans().length > 0 && isIdle());
 	});
 
-	it('leaves material out until someone is ahead', () => {
-		expect(chess.pane()).not.toContain('Material');
-		expect(chess.pane()).not.toContain("You're");
+	it('shows your move and Thinking… before the engine answers', () => {
+		chess.pick('e2');
+		chess.pick('e4');
+		expect(chess.pane()).toContain('is thinking…');
+		expect(chess.pane()).toContain('White played e4');
 	});
 
 	it('refuses a level change while the engine thinks', async () => {
@@ -303,7 +318,7 @@ describe('LLMChess mod in a pane', () => {
 		chess.pick('e4');
 		const reply = await chess.run('level 1');
 		expect(reply?.message).toContain('finish its move');
-		await settled(() => /1\. e4 \S+/.test(chess.pane()) && isIdle());
+		await settled(() => /^e4 \S+$/.test(chess.sans()) && isIdle());
 	});
 
 	it('does not stay stuck thinking after resigning mid-search', async () => {
@@ -321,7 +336,7 @@ describe('LLMChess mod in a pane', () => {
 		expect(chess.picks()).toEqual(['Nf3', 'Nh3', '‹ back']);
 		expect(chess.pane()).toContain('•');
 		chess.pick('Nf3');
-		await settled(() => /1\. Nf3 \S+/.test(chess.pane()) && isIdle());
+		await settled(() => /^Nf3 \S+$/.test(chess.sans()) && isIdle());
 		expect(chess.pane()).toContain('Choose a piece:');
 		expect(chess.pane()).not.toContain('•');
 	});
@@ -335,7 +350,7 @@ describe('LLMChess mod in a pane', () => {
 	it('drops a half-made pick when a move arrives from the prompt', async () => {
 		chess.pick('e2');
 		await chess.run('d4');
-		await settled(() => /1\. d4 \S+/.test(chess.pane()) && isIdle());
+		await settled(() => /^d4 \S+$/.test(chess.sans()) && isIdle());
 		expect(chess.pane()).toContain('Choose a piece:');
 	});
 
@@ -346,20 +361,10 @@ describe('LLMChess mod in a pane', () => {
 		chess.pick('Thinking…');
 		await settled(isIdle);
 		await chess.run('resign');
-		expect(chess.picks()).toEqual(['New game', 'Copy PGN']);
+		expect(chess.picks()).toEqual(['New game', 'Settings']);
 		chess.pick('New game');
 		chess.pick('White');
 		await settled(() => chess.pane().includes('Choose a piece:'));
-	});
-
-	it('copies the game as PGN from the menu', async () => {
-		chess.pick('e2');
-		chess.pick('e4');
-		await settled(() => /1\. e4 \S+/.test(chess.pane()) && isIdle());
-		chess.pick('≡ menu');
-		chess.pick('Copy PGN');
-		await settled(() => chess.pane().includes('PGN copied'));
-		expect(chess.copied()[0]).toMatch(/\[White "You"\][\s\S]*1\. e4 \S+ \*/);
 	});
 
 	it('frees the board when a new game replaces one mid-search', async () => {
@@ -370,7 +375,7 @@ describe('LLMChess mod in a pane', () => {
 		await chess.run('new');
 		const reply = await chess.run('d4');
 		expect(reply?.message).toBeUndefined();
-		await settled(() => /1\. d4 \S+/.test(chess.pane()) && isIdle());
+		await settled(() => /^d4 \S+$/.test(chess.sans()) && isIdle());
 	});
 
 	it('lets the engine move first in a save left on its turn', async () => {
@@ -414,9 +419,8 @@ describe('LLMChess against the session LLM', () => {
 		chess.answer(said('**e5**\nYour move, human.'));
 		chess.pick('e2');
 		chess.pick('e4');
-		await settled(() => /1\. e4 e5/.test(chess.pane()) && isIdle());
+		await settled(() => chess.sans() === 'e4 e5' && isIdle());
 		expect(chess.pane()).toContain('LLM: "Your move, human."');
-		expect(chess.pane()).toContain('vs test-model');
 		expect(chess.asked()[0]?.prompt).toContain('You play black.');
 		expect(chess.asked()[0]?.prompt).toContain('Legal moves:');
 	});
@@ -425,7 +429,7 @@ describe('LLMChess against the session LLM', () => {
 		chess.answer(said('Ke2'), said('Nf6'));
 		chess.pick('e2');
 		chess.pick('e4');
-		await settled(() => /1\. e4 Nf6/.test(chess.pane()) && isIdle());
+		await settled(() => chess.sans() === 'e4 Nf6' && isIdle());
 		expect(chess.asked()).toHaveLength(2);
 		expect(chess.asked()[1]?.prompt).toContain('not one of the legal moves');
 	});
@@ -434,28 +438,47 @@ describe('LLMChess against the session LLM', () => {
 		chess.answer(said('Ke2'), said('resign?'));
 		chess.pick('e2');
 		chess.pick('e4');
-		await settled(() => /1\. e4 \S+/.test(chess.pane()) && isIdle());
+		await settled(() => /^e4 \S+$/.test(chess.sans()) && isIdle());
 		expect(chess.pane()).toContain("didn't answer with a legal move");
 	});
 
 	it('lets the engine play when the model is unavailable', async () => {
 		chess.pick('e2');
 		chess.pick('e4');
-		await settled(() => /1\. e4 \S+/.test(chess.pane()) && isIdle());
+		await settled(() => /^e4 \S+$/.test(chess.sans()) && isIdle());
 		expect(chess.pane()).toContain("model isn't available");
 	});
 
-	it('switches to the engine and back without a new game', async () => {
+	it('sets opponent and level in one pick from /chess settings', async () => {
+		chess.choose('Built-in engine, level 5');
+		const reply = await chess.run('settings');
+		expect(chess.dialogs()[0]).toEqual([
+			'Your session LLM',
+			'Built-in engine, level 1',
+			'Built-in engine, level 2',
+			'Built-in engine, level 3',
+			'Built-in engine, level 4',
+			'Built-in engine, level 5',
+		]);
+		expect(reply?.message).toBe('Now playing the engine, level 5.');
+		await chess.run('e4');
+		await settled(() => /^e4 \S+$/.test(chess.sans()) && isIdle());
+		expect(chess.asked()).toHaveLength(0);
+		chess.choose('Your session LLM');
+		chess.pick('≡ menu');
+		chess.pick('Settings');
+		await settled(() => chess.pane().includes("Now playing your session's LLM"));
+	});
+
+	it('leaves settings alone when the dialog is dismissed', async () => {
+		chess.choose(undefined);
+		const reply = await chess.run('settings');
+		expect(reply?.message).toBe('Settings unchanged.');
+	});
+
+	it('still switches opponent from the prompt', async () => {
 		const reply = await chess.run('vs engine');
 		expect(reply?.message).toContain('Now playing the engine');
-		await chess.run('e4');
-		await settled(() => /1\. e4 \S+/.test(chess.pane()) && isIdle());
-		expect(chess.asked()).toHaveLength(0);
-		expect(chess.pane()).toContain('vs engine, level 3');
-		chess.pick('≡ menu');
-		chess.pick('vs Engine');
-		chess.pick('Your session LLM');
-		await settled(() => chess.pane().includes("Now playing your session's LLM"));
 	});
 
 	it('cancels the LLM call when a new game replaces the board', async () => {
@@ -467,13 +490,13 @@ describe('LLMChess against the session LLM', () => {
 		expect(chess.asked()[0]?.signal?.aborted).toBe(true);
 		const reply = await chess.run('d4');
 		expect(reply?.message).toBeUndefined();
-		await settled(() => /1\. d4 \S+/.test(chess.pane()) && isIdle());
+		await settled(() => /^d4 \S+$/.test(chess.sans()) && isIdle());
 	});
 
 	it('starts a game as black against the LLM, which opens', async () => {
 		chess.answer(said('d4\nLet us begin.'));
 		await chess.run('new black');
-		await settled(() => /1\. d4/.test(chess.pane()) && isIdle());
+		await settled(() => chess.sans() === 'd4' && isIdle());
 		expect(chess.asked()[0]?.prompt).toContain('You play white.');
 		expect(chess.asked()[0]?.prompt).toContain('none, you move first');
 	});
@@ -493,8 +516,7 @@ describe('LLMChess against the session LLM', () => {
 		);
 		const loaded = loadChess({hasPane: true});
 		await loaded.run('e4');
-		await settled(() => /1\. e4 \S+/.test(loaded.pane()));
-		expect(loaded.pane()).toContain('vs engine, level 2');
+		await settled(() => /^e4 \S+$/.test(loaded.sans()));
 		expect(loaded.asked()).toHaveLength(0);
 	});
 });

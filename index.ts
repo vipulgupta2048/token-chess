@@ -22,16 +22,12 @@ import {
 	colorName,
 	currentPosition,
 	describeOutcome,
-	capturedPieces,
 	type Game,
-	materialLead,
-	moveLines,
 	moveListText,
 	newGame,
 	type Opponent,
 	outcomeOf,
 	playMove,
-	toPgn,
 	undoTurn,
 } from './src/game.js';
 import {type LlmReply, llmPrompt, readReply, retryPrompt} from './src/llm.js';
@@ -53,9 +49,8 @@ import {
 	type BoardView,
 	bold,
 	dim,
-	GLYPHS,
 	renderBoard,
-	renderPanel,
+	renderBoardLines,
 	wrapText,
 } from './src/render.js';
 import {explainIllegal, parseMove} from './src/san.js';
@@ -74,28 +69,24 @@ const LLM_TIMEOUT_MS = 60_000;
 // Room for a move and a short remark, and for a reasoning model's preamble.
 const LLM_MAX_TOKENS = 400;
 const PIECE = '♙';
-const PANE_MOVES = 4;
 // A pane drops empty lines, so a gap between sections is one space.
 const BLANK = ' ';
 
 const WAIT = 'wait';
-const UNDO = 'undo';
 const NEW = 'new';
-const LEVEL = 'level';
 const RESIGN = 'resign';
 const RESIGN_YES = 'resign-yes';
-const TYPE = 'type';
-const PGN = 'pgn';
-const OPPONENT = 'opponent';
+const SETTINGS = 'settings';
 
-type Stage =
-	| 'piece'
-	| 'target'
-	| 'menu'
-	| 'side'
-	| 'level'
-	| 'opponent'
-	| 'resign';
+const ENGINE_LEVELS: readonly string[] = [
+	'Easiest: looks one move ahead.',
+	'Easy.',
+	'The default: sees short tactics and mates in two.',
+	'Strong.',
+	'Strongest, a couple of seconds a move.',
+];
+
+type Stage = 'piece' | 'target' | 'menu' | 'side' | 'resign';
 
 interface Reply {
 	readonly message?: string;
@@ -198,40 +189,6 @@ function paneHeadline(game: Game, thinking: boolean): string {
 	return `${check}${prompt}${lastMoveText(game)}`;
 }
 
-function materialText(game: Game): string {
-	const lead = materialLead(game);
-	if (lead === 0) return '';
-	return lead > 0 ? `You're up ${lead}` : `You're down ${-lead}`;
-}
-
-function glyphs(letters: readonly string[]): string {
-	return letters.map(letter => GLYPHS[letter] ?? '').join('');
-}
-
-// Who you are playing: the LLM by its model name once it has answered.
-function rivalLine(game: Game, model: string | undefined): string {
-	if (game.opponent === 'engine') return `vs engine, level ${game.level}`;
-	return `vs ${model ?? 'your session LLM'}`;
-}
-
-// Recent moves, then what each side has taken and who is ahead.
-function sideLines(game: Game, model: string | undefined): readonly string[] {
-	const taken = capturedPieces(game, opponent(game.player));
-	const lost = capturedPieces(game, game.player);
-	const material = materialText(game);
-	const tally = [
-		...(taken.length > 0 ? [`Taken ${glyphs(taken)}`] : []),
-		...(lost.length > 0 ? [`Lost  ${glyphs(lost)}`] : []),
-		...(material ? [material] : []),
-	];
-	return [
-		...moveLines(game, PANE_MOVES),
-		...(tally.length > 0 ? [BLANK, ...tally.map(line => dim(line))] : []),
-		BLANK,
-		dim(rivalLine(game, model)),
-	];
-}
-
 function statusText(game: Game, thinking: boolean): string {
 	if (thinking) return `${PIECE} ${NAME} · ${rivalName(game)} thinking…`;
 	const outcome = outcomeOf(game);
@@ -274,7 +231,6 @@ export default function llmChess(cmd: ModApi): void {
 	// The answer to the last thing typed in the pane, until the next one.
 	let notice = '';
 	let pick: Pick | undefined;
-	let isTyping = false;
 
 	function currentPick(current: Game): Pick {
 		return pick?.game === current
@@ -433,7 +389,7 @@ export default function llmChess(cmd: ModApi): void {
 		if (action.kind === 'invalid') return {message: action.message};
 		if (action.kind === 'new') return startNew(action);
 		if (action.kind === 'move') return move(action.text);
-		if (action.kind === 'pgn') return copyPgn(currentGame());
+		if (action.kind === 'settings') return openSettings(currentGame());
 		const current = currentGame();
 		const waitMessage = `Wait for the ${rivalName(current)} to finish its move.`;
 		if (action.kind === 'opponent') {
@@ -471,17 +427,46 @@ export default function llmChess(cmd: ModApi): void {
 		return {};
 	}
 
-	// Copies the game for any chess site; where nothing can copy, the PGN
-	// itself is the answer.
-	async function copyPgn(current: Game): Promise<Reply> {
-		const rival =
-			current.opponent === 'llm'
-				? (model ?? 'LLM')
-				: `${NAME} engine level ${current.level}`;
-		const pgn = toPgn({game: current, date: new Date(), rival});
-		const copied = await cmd.ui.copy(pgn);
-		if (copied.isCopied) return {message: 'PGN copied to the clipboard.'};
-		return {message: pgn};
+	// One pick in Command Code's own dialog sets who you play and how strong
+	// the engine is: the LLM, or the engine at one of its levels.
+	async function openSettings(current: Game): Promise<Reply> {
+		if (thinking)
+			return {message: `Wait for the ${rivalName(current)} to finish its move.`};
+		const choices = [
+			{
+				label: 'Your session LLM',
+				description: `${model ?? 'The model this session uses'}. The engine at level ${current.level} stands in when it can't move.`,
+				opponent: 'llm' as const,
+				level: current.level,
+			},
+			...Array.from({length: MAX_LEVEL}, (_, index) => ({
+				label: `Built-in engine, level ${index + 1}`,
+				description: ENGINE_LEVELS[index] ?? '',
+				opponent: 'engine' as const,
+				level: index + 1,
+			})),
+		].map(choice =>
+			choice.opponent === current.opponent &&
+			(choice.opponent === 'llm' || choice.level === current.level)
+				? {...choice, description: `Current. ${choice.description}`}
+				: choice,
+		);
+		const picked = await cmd.ui.select({
+			title: 'Play against',
+			options: choices.map(({label, description}) => ({label, description})),
+		});
+		const choice = choices.find(item => item.label === picked);
+		if (!choice) return {message: 'Settings unchanged.'};
+		const latest = game ?? current;
+		game = {...latest, opponent: choice.opponent, level: choice.level};
+		saveGame(file, game);
+		paint(game);
+		return {
+			message:
+				choice.opponent === 'llm'
+					? "Now playing your session's LLM."
+					: `Now playing the engine, level ${choice.level}.`,
+		};
 	}
 
 	// Everything from inside the pane answers inside the pane.
@@ -512,36 +497,15 @@ export default function llmChess(cmd: ModApi): void {
 					? atPieces
 					: inMenu,
 			);
-		if (value === UNDO) return void runInPane({kind: 'undo'});
-		if (value === PGN) return void runInPane({kind: 'pgn'});
+		if (value === SETTINGS) return void runInPane({kind: 'settings'});
 		if (value === RESIGN) return goTo({...inMenu, stage: 'resign'});
 		if (value === RESIGN_YES) return void runInPane({kind: 'resign'});
 		if (value === NEW) return goTo({...inMenu, stage: 'side'});
 		if (value === 'w' || value === 'b')
 			return void runInPane({kind: 'new', player: value});
-		if (value === LEVEL) return goTo({...inMenu, stage: 'level'});
-		if (value === OPPONENT) return goTo({...inMenu, stage: 'opponent'});
-		if (state.stage === 'opponent')
-			return void runInPane({
-				kind: 'opponent',
-				opponent: value === 'engine' ? 'engine' : 'llm',
-			});
-		if (state.stage === 'level')
-			return void runInPane({kind: 'level', level: Number(value)});
-		if (value === TYPE) {
-			isTyping = true;
-			return goTo(atPieces);
-		}
 		if (state.stage === 'target')
 			return void runInPane({kind: 'move', text: value});
 		goTo({game: current, stage: 'target', from: value, page: 0});
-	}
-
-	// An empty Enter leaves typing for the picker again.
-	function submitTyped(text: string): void {
-		if (text.trim() !== '') return void runInPane(parseAction(text));
-		isTyping = false;
-		cmd.ui.refreshWidgets();
 	}
 
 	// One control at a time, always at the same spot, so focus stays on it; a
@@ -567,23 +531,12 @@ export default function llmChess(cmd: ModApi): void {
 		if (stage === 'menu')
 			return [
 				dim('Menu'),
-				select(
-					`menu-${page}`,
-					pageOf({
-						options: [
-							{label: 'Undo', value: UNDO},
-							{label: 'New game', value: NEW},
-							{label: `vs ${rivalName(current)}`, value: OPPONENT},
-							{label: `Level ${current.level}`, value: LEVEL},
-							{label: 'Resign', value: RESIGN},
-							{label: 'Type a move', value: TYPE},
-							{label: 'Copy PGN', value: PGN},
-						],
-						page,
-						width,
-						tail: [BACK_OPTION],
-					}),
-				),
+				select('menu', [
+					{label: 'New game', value: NEW},
+					{label: 'Settings', value: SETTINGS},
+					{label: 'Resign', value: RESIGN},
+					BACK_OPTION,
+				]),
 			];
 		if (stage === 'side')
 			return [
@@ -593,34 +546,6 @@ export default function llmChess(cmd: ModApi): void {
 					{label: 'Black', value: 'b'},
 					BACK_OPTION,
 				]),
-			];
-		if (stage === 'level')
-			return [
-				dim('Engine level:'),
-				select(
-					'level',
-					[
-						...Array.from({length: MAX_LEVEL}, (_, index) => ({
-							label: String(index + 1),
-							value: String(index + 1),
-						})),
-						BACK_OPTION,
-					],
-					String(current.level),
-				),
-			];
-		if (stage === 'opponent')
-			return [
-				dim('Play against:'),
-				select(
-					'opponent',
-					[
-						{label: 'Your session LLM', value: 'llm' satisfies Opponent},
-						{label: 'Built-in engine', value: 'engine' satisfies Opponent},
-						BACK_OPTION,
-					],
-					current.opponent,
-				),
 			];
 		if (stage === 'resign')
 			return [
@@ -635,19 +560,8 @@ export default function llmChess(cmd: ModApi): void {
 				dim('Game over'),
 				select('over', [
 					{label: 'New game', value: NEW},
-					{label: 'Copy PGN', value: PGN},
+					{label: 'Settings', value: SETTINGS},
 				]),
-			];
-		if (isTyping)
-			return [
-				dim('Type a move, or press Enter alone for the picker'),
-				{
-					type: 'input',
-					key: 'move',
-					placeholder: 'e4, Nf3, O-O',
-					value: '',
-					onSubmit: submitTyped,
-				},
 			];
 		const position = currentPosition(current);
 		const options = from
@@ -679,11 +593,7 @@ export default function llmChess(cmd: ModApi): void {
 			paneHeadline(current, thinking),
 			...said,
 			BLANK,
-			...renderPanel({
-				view: pickedView(current, currentPick(current).from),
-				side: sideLines(current, model),
-				width,
-			}),
+			...renderBoardLines(pickedView(current, currentPick(current).from)),
 			BLANK,
 			...(notice ? [...wrapText(notice, width), BLANK] : []),
 			...controlNodes(current, width),
@@ -709,11 +619,12 @@ export default function llmChess(cmd: ModApi): void {
 		description:
 			'Play chess against your session LLM, or a built-in engine, while the agent works',
 		argumentHint:
-			'<move> | new [black] [engine] | vs <llm|engine> | undo | level <1-5> | resign | pgn | help',
+			'<move> | new [black] | settings | undo | resign | help',
 		handler: async ({args}) => {
 			const action = parseAction(args);
 			notice = '';
-			if (hasPane) cmd.ui.openPane(PANE, {focus: action.kind === 'show'});
+			if (hasPane && action.kind !== 'settings')
+				cmd.ui.openPane(PANE, {focus: action.kind === 'show'});
 			const reply = await run(action);
 			return reply.message ? {message: reply.message} : undefined;
 		},

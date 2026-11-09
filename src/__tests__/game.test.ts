@@ -3,15 +3,11 @@ import {
 	currentPosition,
 	describeOutcome,
 	fromSaved,
-	capturedPieces,
 	type Game,
-	materialLead,
-	moveLines,
 	moveListText,
 	newGame,
 	outcomeOf,
 	playMove,
-	toPgn,
 	toSaved,
 	undoTurn,
 } from '../game.js';
@@ -127,47 +123,7 @@ describe('save and move list', () => {
 	});
 });
 
-describe('pane helpers', () => {
-	it('lists full moves one per line, last few only', () => {
-		const game = play(newGame({player: 'w', level: 1}), [
-			'e4',
-			'e5',
-			'Nf3',
-			'Nc6',
-			'Bc4',
-		]);
-		expect(moveLines(game, 2)).toEqual(['2. Nf3 Nc6', '3. Bc4']);
-		expect(moveLines(newGame({player: 'w', level: 1}), 2)).toEqual([]);
-	});
-
-	it('counts material from the player\'s side', () => {
-		const start = play(newGame({player: 'w', level: 1}), ['e4', 'd5', 'exd5']);
-		expect(materialLead(start)).toBe(1);
-		expect(materialLead({...start, player: 'b'})).toBe(-1);
-	});
-});
-
-describe('captures and PGN', () => {
-	it('lists what each side has lost', () => {
-		const game = play(newGame({player: 'w', level: 1}), ['e4', 'd5', 'exd5', 'Qxd5']);
-		expect(capturedPieces(game, 'b')).toEqual(['p']);
-		expect(capturedPieces(game, 'w')).toEqual(['P']);
-	});
-
-	it('writes a PGN any chess site reads', () => {
-		const game = play(newGame({player: 'b', level: 2}), ['f3', 'e5', 'g4', 'Qh4#']);
-		const pgn = toPgn({
-			game,
-			date: new Date('2026-11-09T12:00:00Z'),
-			rival: 'test-model',
-		});
-		expect(pgn).toContain('[Date "2026.11.09"]');
-		expect(pgn).toContain('[White "test-model"]');
-		expect(pgn).toContain('[Black "You"]');
-		expect(pgn).toContain('[Result "0-1"]');
-		expect(pgn.trim().endsWith('1. f3 e5 2. g4 Qh4# 0-1')).toBe(true);
-	});
-
+describe('saved games', () => {
 	it('falls back to the default level for a bad saved one', () => {
 		const saved = {...toSaved(newGame({player: 'w', level: 2})), level: 99};
 		expect(fromSaved(saved)?.level).toBe(3);
