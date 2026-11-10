@@ -604,13 +604,23 @@ describe('LLMChess footer', () => {
 	});
 
 	it('hides the footer while the board is drawn, and brings it back once it is not', async () => {
+		const pause = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 		await chess.run('vs engine');
 		expect(chess.status()).toContain('LLMChess');
 		chess.pane();
-		await new Promise(resolve => setTimeout(resolve, 0));
+		await pause(0);
 		expect(chess.status()).toBe('');
+		// Each check asks for a redraw; an open board answers it, so the footer
+		// stays hidden check after check.
+		for (let check = 0; check < 3; check++) {
+			chess.tick();
+			chess.pane();
+			await pause(600);
+			expect(chess.status()).toBe('');
+		}
+		// A check with no redraw means the board closed.
 		chess.tick();
-		await new Promise(resolve => setTimeout(resolve, 600));
+		await pause(600);
 		expect(chess.status()).toContain('LLMChess · your move');
 	});
 
