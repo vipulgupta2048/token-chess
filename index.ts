@@ -218,7 +218,9 @@ function problemFor(params: {
 
 export default function llmChess(cmd: ModApi): void {
 	const file = defaultGameFile();
-	const hasPane = cmd.ui.capabilities?.surface === true;
+	// Mods load before the TUI mounts, so `surface` is still false at load:
+	// read it when drawing, not once up front.
+	const hasPane = (): boolean => cmd.ui.capabilities?.surface === true;
 	let game = loadGame(file) ?? loadGame(legacyGameFile());
 	let thinking = false;
 	let searches = 0;
@@ -245,13 +247,13 @@ export default function llmChess(cmd: ModApi): void {
 
 	function paint(current: Game): void {
 		cmd.ui.setStatus(statusText(current, thinking));
-		if (hasPane) cmd.ui.refreshWidgets();
+		if (hasPane()) cmd.ui.refreshWidgets();
 	}
 
 	function show(current: Game): void {
 		saveGame(file, current);
 		paint(current);
-		if (!hasPane) cmd.showEntry(RENDERER, boardView(current));
+		if (!hasPane()) cmd.showEntry(RENDERER, boardView(current));
 	}
 
 	async function engineMove(current: Game): Promise<Move | undefined> {
@@ -602,7 +604,9 @@ export default function llmChess(cmd: ModApi): void {
 
 	cmd.addRenderer(RENDERER, data => renderBoard(data as BoardView));
 
-	if (hasPane) {
+	// Hosts older than panes have no `capabilities`. Any newer host gets the
+	// pane registered up front, ready for when the TUI draws it.
+	if (cmd.ui.capabilities) {
 		cmd.ui.pane({
 			id: PANE,
 			title: NAME,
@@ -623,7 +627,7 @@ export default function llmChess(cmd: ModApi): void {
 		handler: async ({args}) => {
 			const action = parseAction(args);
 			notice = '';
-			if (hasPane && action.kind !== 'settings')
+			if (hasPane() && action.kind !== 'settings')
 				cmd.ui.openPane(PANE, {focus: action.kind === 'show'});
 			const reply = await run(action);
 			return reply.message ? {message: reply.message} : undefined;

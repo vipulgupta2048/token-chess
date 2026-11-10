@@ -37,9 +37,14 @@ interface Stub {
 	// 'hold' answers only when the call is aborted.
 	readonly answer: (...answers: (ModModelCompleteResult | 'hold')[]) => void;
 	readonly asked: () => readonly {prompt: string; signal?: AbortSignal}[];
+	// The TUI mounting its surface, which happens after mods load.
+	readonly mount: () => void;
 }
 
-function loadChess(options: {hasPane: boolean} = {hasPane: false}): Stub {
+function loadChess(
+	options: {hasPane: boolean; isMountedLater?: boolean} = {hasPane: false},
+): Stub {
+	let isMounted = options.hasPane && !options.isMountedLater;
 	const feed: string[] = [];
 	const commands: string[] = [];
 	const renderers = new Map<string, (data: unknown) => readonly string[]>();
@@ -54,7 +59,11 @@ function loadChess(options: {hasPane: boolean} = {hasPane: false}): Stub {
 	const disposable = {dispose: (): void => {}};
 	const cmd: ModApi = {
 		ui: {
-			capabilities: {surface: options.hasPane},
+			capabilities: {
+				get surface() {
+					return isMounted;
+				},
+			},
 			setStatus: text => {
 				status = text ?? '';
 				return disposable;
@@ -110,6 +119,9 @@ function loadChess(options: {hasPane: boolean} = {hasPane: false}): Stub {
 				typeof node === 'object' && node.type === 'select',
 		);
 	return {
+		mount: () => {
+			isMounted = options.hasPane;
+		},
 		// Pages through `more ›` like a player would, to find the option.
 		pick: label => {
 			for (let page = 0; page < 5; page++) {
@@ -258,6 +270,15 @@ describe('LLMChess mod in a pane', () => {
 		expect(chess.opened).toEqual([{id: 'board', focus: true}]);
 		expect(chess.feed).toHaveLength(0);
 		expect(chess.pane()).toContain('Your move');
+	});
+
+	it('draws in the pane when the TUI mounts after the mod loads', async () => {
+		const late = loadChess({hasPane: true, isMountedLater: true});
+		late.mount();
+		await late.run('');
+		expect(late.opened).toEqual([{id: 'board', focus: true}]);
+		expect(late.feed).toHaveLength(0);
+		expect(late.pane()).toContain('Your move');
 	});
 
 	it('leaves the keyboard at the prompt for /chess <move>', async () => {
