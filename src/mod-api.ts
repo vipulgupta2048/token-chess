@@ -85,6 +85,8 @@ export interface ModApi {
 	readonly ui: ModUi;
 	// Absent on hosts older than mod model calls.
 	readonly model?: ModModel;
+	// The session's model id; absent on older hosts, undefined before a session binds.
+	getModel?(): string | undefined;
 	hooks(hooks: ModHooks): Disposable;
 	on(event: 'run_start' | 'run_end', handler: () => void): Disposable;
 	addCommand(command: ModCommand): Disposable;

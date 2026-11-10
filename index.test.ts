@@ -331,7 +331,7 @@ describe('LLMChess mod in a pane', () => {
 		chess.pick('e2');
 		chess.pick('e4');
 		expect(chess.pane()).toContain('is thinking…');
-		expect(chess.pane()).toContain('White played e4');
+		expect(chess.pane()).toContain('You played e4');
 	});
 
 	it('refuses a level change while the engine thinks', async () => {
@@ -441,7 +441,8 @@ describe('LLMChess against the session LLM', () => {
 		chess.pick('e2');
 		chess.pick('e4');
 		await settled(() => chess.sans() === 'e4 e5' && isIdle());
-		expect(chess.pane()).toContain('LLM: "Your move, human."');
+		expect(chess.pane()).toContain('Test Model played e5');
+		expect(chess.pane()).toContain('Test Model: "Your move, human."');
 		expect(chess.asked()[0]?.prompt).toContain('You play black.');
 		expect(chess.asked()[0]?.prompt).toContain('Legal moves:');
 	});
@@ -461,6 +462,7 @@ describe('LLMChess against the session LLM', () => {
 		chess.pick('e4');
 		await settled(() => /^e4 \S+$/.test(chess.sans()) && isIdle());
 		expect(chess.pane()).toContain("didn't answer with a legal move");
+		expect(chess.pane()).toMatch(/Opponent \S.* \(subbing in for Test Model\)/);
 	});
 
 	it('lets the engine play when the model is unavailable', async () => {
