@@ -306,7 +306,7 @@ describe('LLMChess mod in a pane', () => {
 
 	it('draws nothing beside the board', () => {
 		const rank = chess.pane().split('\n').find(line => line.startsWith(' 8 '));
-		expect(rank?.trimEnd().length).toBeLessThanOrEqual(27);
+		expect(rank?.trimEnd().length).toBeLessThanOrEqual(43);
 	});
 
 	it('resigns from the menu after asking', async () => {

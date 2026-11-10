@@ -54,21 +54,43 @@ function screenOrder(player: Color): readonly number[] {
 	return player === 'b' ? BACKWARD : FORWARD;
 }
 
-function squareBackground(params: {
+// A terminal cell is about twice as tall as it is wide, so a square is five
+// cells across and two rows down: half a row above the piece, its row, and
+// half a row below. The half rows are ▀ and ▄ blocks shared by neighbouring
+// ranks, which keeps each piece centred in a square-looking square.
+const SQUARE_WIDTH = 5;
+const UPPER_HALF = '▀';
+const LOWER_HALF = '▄';
+
+// 256-color codes for one square.
+function squareColor(params: {
 	row: number;
 	col: number;
-	lit: boolean;
-	checked: boolean;
-}): string {
-	const light = (params.row + params.col) % 2 === 0;
-	if (params.checked) return light ? '\x1b[48;5;210m' : '\x1b[48;5;167m';
-	if (params.lit) return light ? '\x1b[48;5;150m' : '\x1b[48;5;107m';
-	return light ? '\x1b[48;5;223m' : '\x1b[48;5;180m';
+	view: BoardView;
+}): number {
+	const {row, col, view} = params;
+	const square = squareAt(row, col);
+	const light = (row + col) % 2 === 0;
+	if (view.checked === square) return light ? 210 : 167;
+	if (view.highlight.includes(square)) return light ? 150 : 107;
+	return light ? 223 : 180;
+}
+
+function background(color: number): string {
+	return `\x1b[48;5;${color}m`;
+}
+
+function foreground(color: number): string {
+	return `\x1b[38;5;${color}m`;
 }
 
 function cell(piece: string, hasDot: boolean): string {
-	if (piece === '') return hasDot ? ` ${INK}•${RESET_FOREGROUND} ` : '   ';
-	return ` ${INK}${GLYPHS[piece] ?? '?'}${RESET_FOREGROUND} `;
+	const pad = ' '.repeat((SQUARE_WIDTH - 1) / 2);
+	if (piece === '')
+		return hasDot
+			? `${pad}${INK}•${RESET_FOREGROUND}${pad}`
+			: ' '.repeat(SQUARE_WIDTH);
+	return `${pad}${INK}${GLYPHS[piece] ?? '?'}${RESET_FOREGROUND}${pad}`;
 }
 
 function rankLine(params: {
@@ -79,13 +101,34 @@ function rankLine(params: {
 	const {board, row, view} = params;
 	const cells = screenOrder(view.player).map(col => {
 		const square = squareAt(row, col);
-		const lit = view.highlight.includes(square);
-		const checked = view.checked === square;
-		const background = squareBackground({row, col, lit, checked});
+		const color = squareColor({row, col, view});
 		const hasDot = view.dots?.includes(square) === true;
-		return `${background}${cell(board[square] ?? '', hasDot)}${RESET}`;
+		return `${background(color)}${cell(board[square] ?? '', hasDot)}${RESET}`;
 	});
 	return ` ${DIM}${8 - row}${RESET} ${cells.join('')}`;
+}
+
+// The half rows around a rank: `above` paints the lower half of each cell in
+// the rank below it, `below` the upper half in the rank above it. Either may
+// be the board's edge, where the other half stays the pane's own background.
+function edgeLine(params: {
+	above?: number;
+	below?: number;
+	view: BoardView;
+}): string {
+	const {above, below, view} = params;
+	const cells = screenOrder(view.player).map(col => {
+		const block = (glyph: string): string => glyph.repeat(SQUARE_WIDTH);
+		if (above === undefined && below !== undefined)
+			return `${foreground(squareColor({row: below, col, view}))}${block(LOWER_HALF)}`;
+		if (above !== undefined && below === undefined)
+			return `${foreground(squareColor({row: above, col, view}))}${block(UPPER_HALF)}`;
+		if (above === undefined || below === undefined) return '';
+		const top = squareColor({row: above, col, view});
+		const bottom = squareColor({row: below, col, view});
+		return `${foreground(top)}${background(bottom)}${block(UPPER_HALF)}`;
+	});
+	return `   ${cells.join('')}${RESET}`;
 }
 
 // The eight ranks and the file letters: the pane's form.
@@ -93,9 +136,17 @@ export function renderBoardLines(view: BoardView): readonly string[] {
 	const position = parseFen(view.fen);
 	if (!position) return [`LLMChess: unreadable position ${view.fen}`];
 	const order = screenOrder(view.player);
-	const files = order.map(col => ` ${squareName(squareAt(7, col))[0]} `);
+	const pad = ' '.repeat((SQUARE_WIDTH - 1) / 2);
+	const files = order.map(
+		col => `${pad}${squareName(squareAt(7, col))[0]}${pad}`,
+	);
+	const ranks = order.flatMap((row, index) => [
+		rankLine({board: position.board, row, view}),
+		edgeLine({above: row, below: order[index + 1], view}),
+	]);
 	return [
-		...order.map(row => rankLine({board: position.board, row, view})),
+		edgeLine({below: order[0], view}),
+		...ranks,
 		`   ${DIM}${files.join('')}${RESET}`,
 	];
 }

@@ -21,8 +21,8 @@ const plain = (line: string): string => line.replace(/\x1b\[[0-9;]*m/g, '');
 describe('renderBoard', () => {
 	it('draws white hollow and black solid, in the same dark ink', () => {
 		const lines = renderBoard(view);
-		expect(plain(lines[1] ?? '')).toContain('♚');
-		expect(plain(lines[8] ?? '')).toContain('♔');
+		expect(plain(lines[2] ?? '')).toContain('♚');
+		expect(plain(lines[16] ?? '')).toContain('♔');
 		expect(lines.join('\n')).not.toContain('38;5;231');
 	});
 
@@ -38,16 +38,30 @@ describe('renderBoard', () => {
 
 	it('flips the board for black', () => {
 		const lines = renderBoard({...view, player: 'b'}).map(plain);
-		expect(lines[1]?.trim().startsWith('1')).toBe(true);
+		expect(lines[2]?.trim().startsWith('1')).toBe(true);
 	});
 });
 
 describe('renderBoardLines', () => {
 	it('draws only the ranks and files, nothing beside them', () => {
 		const lines = renderBoardLines(view).map(plain);
-		expect(lines).toHaveLength(9);
-		expect(lines[0]).toMatch(/^ 8 /);
-		expect(lines[8]?.trim()).toBe('a  b  c  d  e  f  g  h');
+		expect(lines).toHaveLength(18);
+		expect(lines[1]).toMatch(/^ 8 /);
+		expect(lines[17]?.trim()).toBe('a    b    c    d    e    f    g    h');
+	});
+
+	it('gives every square two rows, half a row each side of its piece', () => {
+		// The pawn's text variation selector takes no cell.
+		const lines = renderBoardLines(view).map(line =>
+			plain(line).replaceAll('\uFE0E', ''),
+		);
+		const board = lines.slice(0, 17);
+		// Rank rows and the half-block rows between them line up exactly.
+		expect(new Set(board.map(line => line.length))).toEqual(new Set([43]));
+		expect(board[0]?.trim()).toBe('▄'.repeat(40));
+		expect(board[2]?.trim()).toBe('▀'.repeat(40));
+		expect(board[16]?.trim()).toBe('▀'.repeat(40));
+		expect(board[1]?.slice(3, 8)).toBe('  ♜  ');
 	});
 });
 
