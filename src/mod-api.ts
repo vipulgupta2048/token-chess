@@ -92,7 +92,10 @@ export interface ModApi {
 	// Absent on hosts older than mod model calls.
 	readonly model?: ModModel;
 	// Absent on hosts older than the mod clock.
-	readonly clock?: {every(ms: number, callback: () => void): Disposable};
+	readonly clock?: {
+		every(ms: number, callback: () => void): Disposable;
+		after?(ms: number, callback: () => void): Disposable;
+	};
 	// The session's model id; absent on older hosts, undefined before a session binds.
 	getModel?(): string | undefined;
 	hooks(hooks: ModHooks): Disposable;

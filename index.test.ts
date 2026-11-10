@@ -624,6 +624,12 @@ describe('LLMChess footer', () => {
 		expect(chess.status()).toContain('LLMChess · your move');
 	});
 
+	it('says so when there is no board to close', async () => {
+		const plain = loadChess({hasPane: false});
+		const reply = await plain.run('close');
+		expect(reply?.message).toBe('There is no board to close here.');
+	});
+
 	it('closes the board with /chess close, and the footer returns', async () => {
 		chess.pane();
 		await chess.run('close');

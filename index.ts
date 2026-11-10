@@ -312,6 +312,13 @@ export default function llmChess(cmd: ModApi): void {
 		return {dispose: () => clearInterval(timer)};
 	}
 
+	// The same for one delay: a host-owned timer is cancelled on hot reload,
+	// so an old instance can't touch the footer after it.
+	function after(ms: number, callback: () => void): void {
+		if (cmd.clock?.after) return void cmd.clock.after(ms, callback);
+		setTimeout(callback, ms).unref();
+	}
+
 	function setThinking(isThinking: boolean): void {
 		thinking = isThinking;
 		spinner?.dispose();
@@ -374,15 +381,19 @@ export default function llmChess(cmd: ModApi): void {
 		const check = (): void => {
 			isPaneDrawn = false;
 			cmd.ui.refreshWidgets();
-			setTimeout(() => {
+			after(PANE_DRAW_GRACE_MS, () => {
 				if (isPaneDrawn) return;
 				isPaneOpen = false;
-				paneWatch?.dispose();
-				paneWatch = undefined;
+				stopWatchingPane();
 				updateFooter();
-			}, PANE_DRAW_GRACE_MS);
+			});
 		};
 		paneWatch = every(PANE_CHECK_MS, check);
+	}
+
+	function stopWatchingPane(): void {
+		paneWatch?.dispose();
+		paneWatch = undefined;
 	}
 
 	function paint(): void {
@@ -755,9 +766,11 @@ export default function llmChess(cmd: ModApi): void {
 		];
 	}
 
-	function closeBoard(): undefined {
-		if (hasPane()) cmd.ui.closePane(PANE);
+	function closeBoard(): {message: string} | undefined {
+		if (!hasPane()) return {message: 'There is no board to close here.'};
+		cmd.ui.closePane(PANE);
 		isPaneOpen = false;
+		stopWatchingPane();
 		updateFooter();
 		return undefined;
 	}
