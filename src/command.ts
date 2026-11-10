@@ -15,6 +15,7 @@ export type Action =
 	| {readonly kind: 'undo'}
 	| {readonly kind: 'resign'}
 	| {readonly kind: 'settings'}
+	| {readonly kind: 'close'}
 	| {readonly kind: 'level'; readonly level: number}
 	| {readonly kind: 'move'; readonly text: string}
 	| {readonly kind: 'invalid'; readonly message: string};
@@ -29,6 +30,7 @@ export const HELP = [
 	'/chess settings     pick your opponent: your session LLM or the engine',
 	'/chess undo         take back your last move and the reply',
 	'/chess resign       give up the current game',
+	'/chess close        hide the board (Ctrl+T brings it back)',
 ].join('\n');
 
 function parsePlayer(word: string): Color | undefined {
@@ -77,6 +79,7 @@ export function parseAction(args: string): Action {
 	if (word === 'help') return {kind: 'help'};
 	if (word === 'undo' || word === 'takeback') return {kind: 'undo'};
 	if (word === 'resign') return {kind: 'resign'};
+	if (word === 'close' || word === 'hide') return {kind: 'close'};
 	if (word === 'settings' || word === 'menu' || word === 'config')
 		return {kind: 'settings'};
 	if (word === 'level') return parseLevel(second);

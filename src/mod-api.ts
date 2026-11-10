@@ -53,6 +53,7 @@ export interface ModUi {
 	setStatus(text: string | null): Disposable;
 	pane(pane: ModPane): Disposable;
 	openPane(id: string, options?: {focus?: boolean}): void;
+	closePane(id: string): void;
 	refreshWidgets(): void;
 	// Absent on hosts older than toasts.
 	toast?(

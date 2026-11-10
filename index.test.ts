@@ -32,6 +32,9 @@ interface Stub {
 	readonly dialogs: () => readonly string[][];
 	// The moves of the game so far, as the save file has them.
 	readonly sans: () => string;
+	readonly closed: () => readonly string[];
+	// Runs the board's closed-or-not check, the way the host clock would.
+	readonly tick: () => void;
 	readonly choose: (label: string | undefined) => void;
 	// Answers the stub model gives, in order; after them it is unavailable.
 	// 'hold' answers only when the call is aborted.
@@ -54,6 +57,8 @@ function loadChess(
 	let pane: ModPane | undefined;
 	const opened: {id: string; focus: boolean}[] = [];
 	const toasts: string[] = [];
+	const closed: string[] = [];
+	const ticks: (() => void)[] = [];
 	const dialogs: string[][] = [];
 	const picked: (string | undefined)[] = [];
 	const answers: (ModModelCompleteResult | 'hold')[] = [];
@@ -76,6 +81,9 @@ function loadChess(
 			},
 			openPane: (id, openOptions) => {
 				opened.push({id, focus: openOptions?.focus === true});
+			},
+			closePane: id => {
+				closed.push(id);
 			},
 			refreshWidgets: () => {},
 			toast: text => {
@@ -104,6 +112,12 @@ function loadChess(
 						resolve({isAnswered: false, reason: 'aborted'}),
 					);
 				});
+			},
+		},
+		clock: {
+			every: (_ms, fn) => {
+				ticks.push(fn);
+				return disposable;
 			},
 		},
 		addShortcut: () => disposable,
@@ -142,6 +156,10 @@ function loadChess(
 		},
 		picks: () => select()?.options.map(item => item.label) ?? [],
 		dialogs: () => dialogs,
+		closed: () => closed,
+		tick: () => {
+			for (const fn of ticks) fn();
+		},
 		sans: () => {
 			try {
 				const saved = JSON.parse(readFileSync(defaultGameFile(), 'utf8'));
@@ -265,7 +283,7 @@ describe('LLMChess mod', () => {
 
 describe('LLMChess mod in a pane', () => {
 	let chess: Stub;
-	const isIdle = () => chess.status().includes('your move');
+	const isIdle = () => chess.pane().includes('Your move');
 	beforeEach(() => {
 		vi.stubEnv('HOME', mkdtempSync(join(tmpdir(), 'token-chess-home-')));
 		chess = loadChess({hasPane: true});
@@ -387,26 +405,26 @@ describe('LLMChess mod in a pane', () => {
 	it('plays a move by picking a piece, then a square', async () => {
 		expect(chess.picks()).toContain('Ng1');
 		chess.pick('Ng1');
-		expect(chess.pane()).toContain('Move g1 to:');
+		expect(chess.picks()).toContain('‹ back');
 		expect(chess.picks()).toEqual(['Nf3', 'Nh3', '‹ back']);
 		expect(chess.pane()).toContain('•');
 		chess.pick('Nf3');
 		await settled(() => /^Nf3 \S+$/.test(chess.sans()) && isIdle());
-		expect(chess.pane()).toContain('Choose a piece:');
+		expect(chess.picks()).toContain('≡ menu');
 		expect(chess.pane()).not.toContain('•');
 	});
 
 	it('goes back to choosing a piece', () => {
 		chess.pick('e2');
 		chess.pick('‹ back');
-		expect(chess.pane()).toContain('Choose a piece:');
+		expect(chess.picks()).toContain('≡ menu');
 	});
 
 	it('drops a half-made pick when a move arrives from the prompt', async () => {
 		chess.pick('e2');
 		await chess.run('d4');
 		await settled(() => /^d4 \S+$/.test(chess.sans()) && isIdle());
-		expect(chess.pane()).toContain('Choose a piece:');
+		expect(chess.picks()).toContain('≡ menu');
 	});
 
 	it('holds the picker in place while thinking and after the game', async () => {
@@ -419,7 +437,7 @@ describe('LLMChess mod in a pane', () => {
 		expect(chess.picks()).toEqual(['New game', 'Settings']);
 		chess.pick('New game');
 		chess.pick('White');
-		await settled(() => chess.pane().includes('Choose a piece:'));
+		await settled(() => chess.picks().includes('≡ menu'));
 	});
 
 	it('frees the board when a new game replaces one mid-search', async () => {
@@ -452,14 +470,14 @@ describe('LLMChess mod in a pane', () => {
 		const loaded = loadChess({hasPane: true});
 		const reply = await loaded.run('e5');
 		expect(reply).toBeUndefined();
-		await settled(() => loaded.status().includes('your move'));
+		await settled(() => loaded.pane().includes('Your move'));
 		expect(loaded.pane()).not.toContain('Level 99');
 	});
 });
 
 describe('LLMChess against the session LLM', () => {
 	let chess: Stub;
-	const isIdle = () => chess.status().includes('your move');
+	const isIdle = () => chess.pane().includes('Your move');
 	const said = (text: string): ModModelCompleteResult => ({
 		isAnswered: true,
 		text,
@@ -575,5 +593,31 @@ describe('LLMChess against the session LLM', () => {
 		await loaded.run('e4');
 		await settled(() => /^e4 \S+$/.test(loaded.sans()));
 		expect(loaded.asked()).toHaveLength(0);
+	});
+});
+
+describe('LLMChess footer', () => {
+	let chess: Stub;
+	beforeEach(() => {
+		vi.stubEnv('HOME', mkdtempSync(join(tmpdir(), 'llmchess-footer-')));
+		chess = loadChess({hasPane: true});
+	});
+
+	it('hides the footer while the board is drawn, and brings it back once it is not', async () => {
+		await chess.run('vs engine');
+		expect(chess.status()).toContain('LLMChess');
+		chess.pane();
+		await new Promise(resolve => setTimeout(resolve, 0));
+		expect(chess.status()).toBe('');
+		chess.tick();
+		await new Promise(resolve => setTimeout(resolve, 600));
+		expect(chess.status()).toContain('LLMChess · your move');
+	});
+
+	it('closes the board with /chess close, and the footer returns', async () => {
+		chess.pane();
+		await chess.run('close');
+		expect(chess.closed()).toEqual(['board']);
+		expect(chess.status()).toContain('LLMChess');
 	});
 });
