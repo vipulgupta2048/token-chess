@@ -6,7 +6,7 @@ the LLM answers through one model call that never touches the agent's
 transcript. A built-in engine plays alongside it: pick it as your opponent, or
 let it step in whenever the LLM can't answer with a legal move.
 
-![LLMChess in a pane above the Command Code prompt](docs/board.svg)
+![LLMChess pane in Command Code: DeepSeek V4.1 Flash played Nf6 and says “Let’s develop and challenge e4.”](docs/llmchess-deepseek.png)
 
 Zero runtime dependencies. Same idea as
 [token-snake](https://github.com/vipulgupta2048/token-snake), but as a mod: no
