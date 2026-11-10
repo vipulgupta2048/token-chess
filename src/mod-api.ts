@@ -53,6 +53,7 @@ export interface ModUi {
 	setStatus(text: string | null): Disposable;
 	pane(pane: ModPane): Disposable;
 	openPane(id: string, options?: {focus?: boolean}): void;
+	closePane(id: string): void;
 	refreshWidgets(): void;
 	// Absent on hosts older than toasts.
 	toast?(
@@ -91,7 +92,10 @@ export interface ModApi {
 	// Absent on hosts older than mod model calls.
 	readonly model?: ModModel;
 	// Absent on hosts older than the mod clock.
-	readonly clock?: {every(ms: number, callback: () => void): Disposable};
+	readonly clock?: {
+		every(ms: number, callback: () => void): Disposable;
+		after?(ms: number, callback: () => void): Disposable;
+	};
 	// The session's model id; absent on older hosts, undefined before a session binds.
 	getModel?(): string | undefined;
 	hooks(hooks: ModHooks): Disposable;

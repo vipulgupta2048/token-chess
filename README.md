@@ -34,15 +34,22 @@ board opens with one control under it, driven by ←/→ and Enter:
 1. Choose a piece.
 2. Choose its square. Dots mark where it can go, and captures light up.
 
-The LLM replies, sometimes with a one-line remark under the headline. New
-game, Settings and Resign are under `≡ menu` at the end of the list. When the
-pieces don't fit on one line, `more ›` at the end shows the next ones.
+New game, Settings and Resign are under `≡ menu` at the end of the list. When
+the pieces don't fit on one line, `more ›` at the end shows the next ones.
+
+Over the board, the headline says what just happened, by name: "You played
+e4", "DeepSeek V4.1 Flash took your knight (Nxe4)". The line under it shows a
+spinner and a timer while the model thinks, then its one-line comment on its
+move. When a model's move throws away a piece or walks into mate, the headline
+calls it out in red: "blundered its queen ?? (Qh4)". At the end of a game, a
+toast says how it went.
 
 `/chess settings` picks who you play in one step: your session LLM, or the
 built-in engine at level 1 to 5.
 
-Esc hands the keyboard back to the prompt, and `/chess`, Alt+C or Alt+↑
-returns to the board. Alt+0 closes it.
+Esc hands the keyboard back to the prompt, and `/chess` or Ctrl+T returns to
+the board. `/chess close` hides it. While the board is open, the footer stays
+quiet, since the board's headline already says whose move it is.
 
 Everything also works from the prompt:
 
@@ -56,6 +63,7 @@ Everything also works from the prompt:
 | `undo` | Take back your last move and the reply |
 | `level <1-5>` | Engine strength, default 3. It is also how strong the LLM's stand-in is |
 | `resign` | Give up the current game |
+| `close` | Hide the board. Ctrl+T or `/chess` brings it back |
 | `help` | The list above |
 
 An illegal move is answered in terms of the piece you named: `Nd5` gets "no
@@ -114,8 +122,8 @@ processes, no hooks on the agent's work.
 | Play the session's LLM | `cmd.model.complete`, aborted when a new game or resignation replaces the board |
 | Take moves while the agent runs | A `select` or `input` element in the pane, or `cmd.addCommand`. Both run while the agent is working |
 | Draw the board | `cmd.ui.pane`, line based ANSI rows repainted with `refreshWidgets`. `cmd.addRenderer` + `cmd.showEntry` where panes aren't available |
-| Reach the board from the prompt | `cmd.addShortcut('alt+c')` |
-| Keep the game visible | `cmd.ui.setStatus`, one footer segment: `♙ LLMChess · your move · last Nf6` |
+| Reach the board from the prompt | `cmd.addShortcut('ctrl+t')`. Ctrl, because macOS terminals pass Alt chords on only with "Option as Meta" |
+| Keep the game visible | `cmd.ui.setStatus`, one footer segment while the board is closed: `♙ LLMChess · your move · last Nf6`. A closed pane is never drawn, so a redraw every two seconds tells when the board closed |
 | Offer a game while you wait | `cmd.on('run_start')` sets `♙ /chess to play while you wait` when no game is going |
 | Resume a saved game | `cmd.hooks({onSessionStart})` |
 | Pick the opponent | `cmd.ui.select`, Command Code's own dialog, from `/chess settings` |

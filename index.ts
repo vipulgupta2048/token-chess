@@ -76,6 +76,10 @@ import {
 const NAME = 'LLMChess';
 const RENDERER = 'llmchess';
 const PANE = 'board';
+// How often an open board is checked for having been closed, and how long a
+// redraw gets to arrive before it counts as closed.
+const PANE_CHECK_MS = 2_000;
+const PANE_DRAW_GRACE_MS = 500;
 // An LLM move that takes longer than this goes to the engine instead.
 const LLM_TIMEOUT_MS = 60_000;
 // Room for a move and a short remark, and for a reasoning model's preamble.
@@ -287,6 +291,10 @@ export default function llmChess(cmd: ModApi): void {
 	}
 	// The LLM's remark with its last move, until the next move.
 	let remark: {readonly game: Game; readonly text: string} | undefined;
+	let isAgentRunning = false;
+	let isPaneOpen = false;
+	let isPaneDrawn = false;
+	let paneWatch: Disposable | undefined;
 	// The last one-line message for the player, until their next action.
 	let notice = '';
 	// When the opponent started thinking, for the spinner's clock.
@@ -295,11 +303,20 @@ export default function llmChess(cmd: ModApi): void {
 	// The finished game already announced, so a reload doesn't toast again.
 	let announced: Game | undefined = game;
 
-	function everyTick(callback: () => void): Disposable {
-		if (cmd.clock) return cmd.clock.every(SPINNER_MS, callback);
-		const timer = setInterval(callback, SPINNER_MS);
+	// A mod-owned timer where the host has one, else one that never holds the
+	// process open.
+	function every(ms: number, callback: () => void): Disposable {
+		if (cmd.clock) return cmd.clock.every(ms, callback);
+		const timer = setInterval(callback, ms);
 		timer.unref();
 		return {dispose: () => clearInterval(timer)};
+	}
+
+	// The same for one delay: a host-owned timer is cancelled on hot reload,
+	// so an old instance can't touch the footer after it.
+	function after(ms: number, callback: () => void): void {
+		if (cmd.clock?.after) return void cmd.clock.after(ms, callback);
+		setTimeout(callback, ms).unref();
 	}
 
 	function setThinking(isThinking: boolean): void {
@@ -308,7 +325,7 @@ export default function llmChess(cmd: ModApi): void {
 		spinner = undefined;
 		if (!isThinking) return;
 		thinkingSince = Date.now();
-		if (hasPane()) spinner = everyTick(() => cmd.ui.refreshWidgets());
+		if (hasPane()) spinner = every(SPINNER_MS, () => cmd.ui.refreshWidgets());
 	}
 
 	// The line under the headline: the spinner while the opponent thinks,
@@ -346,15 +363,48 @@ export default function llmChess(cmd: ModApi): void {
 		return game;
 	}
 
-	function paint(current: Game): void {
-		cmd.ui.setStatus(statusText(current, thinking, llmName()));
+	// The footer repeats what the board's headline says, so it shows only
+	// while the board is closed: the game, or an offer of one mid-run.
+	function updateFooter(): void {
+		if (isPaneOpen) return void cmd.ui.setStatus(null);
+		if (game) return void cmd.ui.setStatus(statusText(game, thinking, llmName()));
+		cmd.ui.setStatus(
+			isAgentRunning ? `${PIECE} /chess to play while you wait` : null,
+		);
+	}
+
+	// No event says the board closed (Alt+0, /mods close), but a closed pane
+	// is never drawn. While it is open, ask for a redraw now and then; when
+	// none arrives, it closed, and the footer comes back.
+	function watchPane(): void {
+		if (paneWatch) return;
+		const check = (): void => {
+			isPaneDrawn = false;
+			cmd.ui.refreshWidgets();
+			after(PANE_DRAW_GRACE_MS, () => {
+				if (isPaneDrawn) return;
+				isPaneOpen = false;
+				stopWatchingPane();
+				updateFooter();
+			});
+		};
+		paneWatch = every(PANE_CHECK_MS, check);
+	}
+
+	function stopWatchingPane(): void {
+		paneWatch?.dispose();
+		paneWatch = undefined;
+	}
+
+	function paint(): void {
+		updateFooter();
 		if (hasPane()) cmd.ui.refreshWidgets();
 	}
 
 	function show(current: Game): void {
 		saveGame(file, current);
 		announce(current);
-		paint(current);
+		paint();
 		if (!hasPane()) cmd.showEntry(RENDERER, boardView(current, llmName()));
 	}
 
@@ -422,7 +472,7 @@ export default function llmChess(cmd: ModApi): void {
 		const controller = new AbortController();
 		pending = controller;
 		setThinking(true);
-		paint(current);
+		paint();
 		const isStale = (): boolean => game !== undefined && game !== current;
 		const asked: LlmTurn =
 			current.opponent === 'llm' ? await askLlm(current, controller) : {};
@@ -440,7 +490,7 @@ export default function llmChess(cmd: ModApi): void {
 		}
 		// A /chess new or resign while the opponent thought replaced the game:
 		// this reply belongs to a board that no longer exists.
-		if (game && isStale()) return void paint(game);
+		if (game && isStale()) return void paint();
 		if (!chosen) return void show(current);
 		const next = playMove(current, chosen);
 		game = next;
@@ -512,7 +562,7 @@ export default function llmChess(cmd: ModApi): void {
 			if (thinking) return {message: waitMessage};
 			game = {...current, opponent: action.opponent};
 			saveGame(file, game);
-			paint(game);
+			paint();
 			return {
 				message:
 					action.opponent === 'llm'
@@ -524,7 +574,7 @@ export default function llmChess(cmd: ModApi): void {
 			if (thinking) return {message: waitMessage};
 			game = {...current, level: action.level};
 			saveGame(file, game);
-			paint(game);
+			paint();
 			return {message: `Engine level set to ${action.level}.`};
 		}
 		if (action.kind === 'resign') {
@@ -576,7 +626,7 @@ export default function llmChess(cmd: ModApi): void {
 		const latest = game ?? current;
 		game = {...latest, opponent: choice.opponent, level: choice.level};
 		saveGame(file, game);
-		paint(game);
+		paint();
 		return {
 			message:
 				choice.opponent === 'llm'
@@ -640,13 +690,9 @@ export default function llmChess(cmd: ModApi): void {
 		});
 		const {stage, from, page} = currentPick(current);
 		if (thinking)
-			return [
-				dim(`${rival(current)} to move`),
-				select('wait', [{label: 'Thinking…', value: WAIT}]),
-			];
+			return [select('wait', [{label: 'Thinking…', value: WAIT}])];
 		if (stage === 'menu')
 			return [
-				dim('Menu'),
 				select('menu', [
 					{label: 'New game', value: NEW},
 					{label: 'Settings', value: SETTINGS},
@@ -684,7 +730,6 @@ export default function llmChess(cmd: ModApi): void {
 			? targetOptions(position, from)
 			: pieceOptions(position);
 		return [
-			dim(`${from ? `Move ${from} to` : 'Choose a piece'}: ←/→ then Enter`),
 			select(
 				`pick-${current.sanLog.length}-${from ?? 'piece'}-${page}`,
 				pageOf({
@@ -698,6 +743,12 @@ export default function llmChess(cmd: ModApi): void {
 	}
 
 	function renderPane(width: number): readonly PaneNode[] {
+		isPaneDrawn = true;
+		if (!isPaneOpen) {
+			isPaneOpen = true;
+			watchPane();
+			queueMicrotask(updateFooter);
+		}
 		const current = currentGame();
 		return [
 			paneHeadline({game: current, thinking, llm: llmName(), mover}),
@@ -715,6 +766,15 @@ export default function llmChess(cmd: ModApi): void {
 		];
 	}
 
+	function closeBoard(): {message: string} | undefined {
+		if (!hasPane()) return {message: 'There is no board to close here.'};
+		cmd.ui.closePane(PANE);
+		isPaneOpen = false;
+		stopWatchingPane();
+		updateFooter();
+		return undefined;
+	}
+
 	cmd.addRenderer(RENDERER, data => renderBoard(data as BoardView));
 
 	// Hosts older than panes have no `capabilities`. Any newer host gets the
@@ -725,7 +785,9 @@ export default function llmChess(cmd: ModApi): void {
 			title: NAME,
 			render: ({width}) => renderPane(width),
 		});
-		cmd.addShortcut('alt+c', {
+		// Ctrl, not Alt: macOS terminals only pass Alt chords through with
+		// "Option as Meta" turned on.
+		cmd.addShortcut('ctrl+t', {
 			description: 'Open the chess board and play in it',
 			handler: () => cmd.ui.openPane(PANE, {focus: true}),
 		});
@@ -736,10 +798,11 @@ export default function llmChess(cmd: ModApi): void {
 		description:
 			'Play chess against your session LLM, or a built-in engine, while the agent works',
 		argumentHint:
-			'<move> | new [black] | settings | undo | resign | help',
+			'<move> | new [black] | settings | undo | resign | close | help',
 		handler: async ({args}) => {
 			const action = parseAction(args);
 			notice = '';
+			if (action.kind === 'close') return closeBoard();
 			if (hasPane() && action.kind !== 'settings')
 				cmd.ui.openPane(PANE, {focus: action.kind === 'show'});
 			const reply = await run(action);
@@ -758,19 +821,13 @@ export default function llmChess(cmd: ModApi): void {
 
 	// A game left in progress shows in the footer from the start of the
 	// session; while the agent works, the footer offers a game if there is none.
-	cmd.hooks({
-		onSessionStart: () => {
-			if (game) cmd.ui.setStatus(statusText(game, thinking, llmName()));
-		},
-	});
+	cmd.hooks({onSessionStart: updateFooter});
 	cmd.on('run_start', () => {
-		cmd.ui.setStatus(
-			game
-				? statusText(game, thinking, llmName())
-				: `${PIECE} /chess to play while you wait`,
-		);
+		isAgentRunning = true;
+		updateFooter();
 	});
 	cmd.on('run_end', () => {
-		if (!game) cmd.ui.setStatus(null);
+		isAgentRunning = false;
+		updateFooter();
 	});
 }
