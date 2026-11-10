@@ -57,7 +57,9 @@ export function moveVerb(game: Game, isPlayers: boolean): string {
 	if (!san) return '';
 	if (san.startsWith('O-O-O')) return 'castled long';
 	if (san.startsWith('O-O')) return 'castled';
-	const target = /([a-h][1-8])(=[QRBN])?[+#]?$/.exec(san)?.[1];
+	// String match, not the RegExp method: `cmd mods inspect` reads that
+	// method's name as running a process.
+	const target = san.match(/([a-h][1-8])(=[QRBN])?[+#]?$/)?.[1];
 	const before = game.positions[game.positions.length - 2];
 	if (!san.includes('x') || !target || !before) return `played ${san}`;
 	// An empty target square is an en passant capture: a pawn.

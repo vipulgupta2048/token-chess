@@ -17,7 +17,10 @@ second terminal pane, and chess is turn based, so it fits between agent steps.
 Needs Command Code 1.85 or later, for mod panes.
 
 ```bash
-# Install it for every session
+# Install it for every session, from npm
+cmd mods add cmd-mod-llmchess -g
+
+# Or straight from GitHub
 cmd mods add vipulgupta2048/token-chess -g
 
 # Or try it for one session from a clone
