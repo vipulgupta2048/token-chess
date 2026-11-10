@@ -98,9 +98,10 @@ interface LlmTurn extends LlmReply {
 	readonly problem?: string;
 }
 
-// The opponent by name: the session's model as people say it, or the engine.
+// The opponent by name: the session's model as people say it, or just
+// "Opponent" for the built-in engine.
 function rivalName(game: Game, llm: string): string {
-	return game.opponent === 'llm' ? llm : 'Engine';
+	return game.opponent === 'llm' ? llm : 'Opponent';
 }
 
 // Who made the opponent's last move, when it differs from the opponent: the
@@ -154,7 +155,7 @@ function boardView(game: Game, llm: string): BoardView {
 		highlight: lastMoveSquares(game),
 		...(isInCheck(position) ? {checked: position.board.indexOf(king)} : {}),
 		heading: dim(
-			`${NAME} · you play ${colorName(game.player)} against ${rivalName(game, llm)} · move ${position.fullmove}`,
+			`${NAME} · you play ${colorName(game.player)} against ${game.opponent === 'llm' ? llm : 'the engine'} · move ${position.fullmove}`,
 		),
 		notes: [...(moves ? [moves] : []), promptLine(game, llm)],
 	};
@@ -381,7 +382,7 @@ export default function llmChess(cmd: ModApi): void {
 		remark = asked.remark ? {game: next, text: asked.remark} : undefined;
 		mover =
 			current.opponent === 'llm' && !asked.move
-				? {game: next, name: 'Engine', note: `(subbing in for ${llmName()})`}
+				? {game: next, name: 'Opponent', note: `(subbing in for ${llmName()})`}
 				: undefined;
 		show(next);
 		return asked.problem;

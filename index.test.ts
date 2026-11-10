@@ -462,7 +462,7 @@ describe('LLMChess against the session LLM', () => {
 		chess.pick('e4');
 		await settled(() => /^e4 \S+$/.test(chess.sans()) && isIdle());
 		expect(chess.pane()).toContain("didn't answer with a legal move");
-		expect(chess.pane()).toMatch(/Engine \S.* \(subbing in for Test Model\)/);
+		expect(chess.pane()).toMatch(/Opponent \S.* \(subbing in for Test Model\)/);
 	});
 
 	it('lets the engine play when the model is unavailable', async () => {
