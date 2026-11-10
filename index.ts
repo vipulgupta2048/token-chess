@@ -31,7 +31,12 @@ import {
 	undoTurn,
 } from './src/game.js';
 import {type LlmReply, llmPrompt, readReply, retryPrompt} from './src/llm.js';
-import type {ModApi, ModModelCompleteResult, PaneNode} from './src/mod-api.js';
+import type {
+	Disposable,
+	ModApi,
+	ModModelCompleteResult,
+	PaneNode,
+} from './src/mod-api.js';
 import {isInCheck, type Move} from './src/moves.js';
 import {
 	BACK,
@@ -49,10 +54,16 @@ import {
 	type BoardView,
 	bold,
 	dim,
+	oneLine,
+	red,
 	renderBoard,
 	renderBoardLines,
+	SPINNER,
+	SPINNER_MS,
 	wrapText,
+	yellow,
 } from './src/render.js';
+import {blunderOf, gameOverText} from './src/effects.js';
 import {modelName, moveVerb} from './src/names.js';
 import {explainIllegal, parseMove} from './src/san.js';
 import {
@@ -110,6 +121,8 @@ interface Mover {
 	readonly game: Game;
 	readonly name: string;
 	readonly note?: string;
+	// How the move threw the game away, called out in red.
+	readonly blunder?: string;
 }
 
 // Where the arrow-key control is. It belongs to one game state, so any move,
@@ -199,6 +212,8 @@ function lastMoveText(params: {
 	const by = mover?.game === game ? mover : undefined;
 	const name = by?.name ?? rivalName(game, llm);
 	const note = by?.note ? ` ${by.note}` : '';
+	const san = game.sanLog[game.sanLog.length - 1];
+	if (by?.blunder) return `${dim(` · ${name} `)}${red(`${by.blunder} ?? (${san})`)}`;
 	return dim(` · ${name} ${moveVerb(game, false)}${note}`);
 }
 
@@ -212,10 +227,10 @@ function paneHeadline(params: {
 	const {game, thinking, llm} = params;
 	const outcome = outcomeOf(game);
 	if (outcome.kind !== 'ongoing')
-		return `${bold(capitalized(describeOutcome(outcome)))}${lastMoveText(params)}`;
+		return `${bold(gameOverText(game, rivalName(game, llm)) ?? '')}${lastMoveText(params)}`;
 	const check = isInCheck(currentPosition(game)) ? bold('Check! ') : '';
 	const prompt = thinking
-		? `${rivalName(game, llm)} is thinking…`
+		? bold('Waiting')
 		: bold('Your move');
 	return `${check}${prompt}${lastMoveText(params)}`;
 }
@@ -224,7 +239,7 @@ function statusText(game: Game, thinking: boolean, llm: string): string {
 	if (thinking) return `${PIECE} ${NAME} · ${rivalName(game, llm)} thinking…`;
 	const outcome = outcomeOf(game);
 	if (outcome.kind !== 'ongoing')
-		return `${PIECE} ${NAME} · ${describeOutcome(outcome)}`;
+		return `♚ ${NAME} · ${gameOverText(game, rivalName(game, llm)) ?? describeOutcome(outcome)}`;
 	const last = game.sanLog[game.sanLog.length - 1];
 	const lastText = last ? ` · last ${last}` : '';
 	const turn =
@@ -272,8 +287,52 @@ export default function llmChess(cmd: ModApi): void {
 	}
 	// The LLM's remark with its last move, until the next move.
 	let remark: {readonly game: Game; readonly text: string} | undefined;
-	// The answer to the last thing typed in the pane, until the next one.
+	// The last one-line message for the player, until their next action.
 	let notice = '';
+	// When the opponent started thinking, for the spinner's clock.
+	let thinkingSince = 0;
+	let spinner: Disposable | undefined;
+	// The finished game already announced, so a reload doesn't toast again.
+	let announced: Game | undefined = game;
+
+	function everyTick(callback: () => void): Disposable {
+		if (cmd.clock) return cmd.clock.every(SPINNER_MS, callback);
+		const timer = setInterval(callback, SPINNER_MS);
+		timer.unref();
+		return {dispose: () => clearInterval(timer)};
+	}
+
+	function setThinking(isThinking: boolean): void {
+		thinking = isThinking;
+		spinner?.dispose();
+		spinner = undefined;
+		if (!isThinking) return;
+		thinkingSince = Date.now();
+		if (hasPane()) spinner = everyTick(() => cmd.ui.refreshWidgets());
+	}
+
+	// The line under the headline: the spinner while the opponent thinks,
+	// then the latest message, or the model's one-line comment on its move.
+	function activityLine(current: Game, width: number): string {
+		if (thinking) {
+			const elapsed = Date.now() - thinkingSince;
+			const frame = SPINNER[Math.floor(elapsed / SPINNER_MS) % SPINNER.length];
+			const text = `${rival(current)} is thinking… ${(elapsed / 1000).toFixed(1)}s`;
+			return `${yellow(frame ?? '')} ${dim(oneLine(text, width - 2))}`;
+		}
+		if (notice) return oneLine(notice, width);
+		if (remark?.game === current)
+			return oneLine(`“${remark.text}”`, width);
+		return BLANK;
+	}
+
+	function announce(current: Game): void {
+		const text = gameOverText(current, rival(current));
+		if (!text || announced === current || current.sanLog.length === 0) return;
+		announced = current;
+		const isWon = text.startsWith('You beat');
+		cmd.ui.toast?.(`♚ ${text}`, {level: isWon ? 'success' : 'info'});
+	}
 	let pick: Pick | undefined;
 
 	function currentPick(current: Game): Pick {
@@ -294,6 +353,7 @@ export default function llmChess(cmd: ModApi): void {
 
 	function show(current: Game): void {
 		saveGame(file, current);
+		announce(current);
 		paint(current);
 		if (!hasPane()) cmd.showEntry(RENDERER, boardView(current, llmName()));
 	}
@@ -361,7 +421,7 @@ export default function llmChess(cmd: ModApi): void {
 		const search = ++searches;
 		const controller = new AbortController();
 		pending = controller;
-		thinking = true;
+		setThinking(true);
 		paint(current);
 		const isStale = (): boolean => game !== undefined && game !== current;
 		const asked: LlmTurn =
@@ -369,8 +429,13 @@ export default function llmChess(cmd: ModApi): void {
 		const chosen = isStale()
 			? undefined
 			: (asked.move ?? (await engineMove(current)));
+		// Only the model's own moves are judged: the engine doesn't blunder.
+		const blunder =
+			chosen && asked.move && !isStale()
+				? await blunderOf(current, playMove(current, chosen))
+				: undefined;
 		if (search === searches) {
-			thinking = false;
+			setThinking(false);
 			pending = undefined;
 		}
 		// A /chess new or resign while the opponent thought replaced the game:
@@ -380,8 +445,11 @@ export default function llmChess(cmd: ModApi): void {
 		const next = playMove(current, chosen);
 		game = next;
 		remark = asked.remark ? {game: next, text: asked.remark} : undefined;
-		mover =
-			current.opponent === 'llm' && !asked.move
+		mover = asked.move
+			? blunder
+				? {game: next, name: llmName(), blunder}
+				: undefined
+			: current.opponent === 'llm'
 				? {game: next, name: 'Opponent', note: `(subbing in for ${llmName()})`}
 				: undefined;
 		show(next);
@@ -391,7 +459,7 @@ export default function llmChess(cmd: ModApi): void {
 	// Leaves any opponent turn running to finish unheard: its game is gone.
 	function abandonSearch(): void {
 		searches++;
-		thinking = false;
+		setThinking(false);
 		pending?.abort();
 		pending = undefined;
 	}
@@ -631,15 +699,9 @@ export default function llmChess(cmd: ModApi): void {
 
 	function renderPane(width: number): readonly PaneNode[] {
 		const current = currentGame();
-		const said =
-			remark?.game === current
-				? wrapText(`${rival(current)}: "${remark.text}"`, width).map(
-						line => dim(line),
-					)
-				: [];
 		return [
 			paneHeadline({game: current, thinking, llm: llmName(), mover}),
-			...said,
+			activityLine(current, width),
 			BLANK,
 			...renderBoardLines(
 				pickedView({
@@ -649,7 +711,6 @@ export default function llmChess(cmd: ModApi): void {
 				}),
 			),
 			BLANK,
-			...(notice ? [...wrapText(notice, width), BLANK] : []),
 			...controlNodes(current, width),
 		];
 	}
@@ -682,7 +743,16 @@ export default function llmChess(cmd: ModApi): void {
 			if (hasPane() && action.kind !== 'settings')
 				cmd.ui.openPane(PANE, {focus: action.kind === 'show'});
 			const reply = await run(action);
-			return reply.message ? {message: reply.message} : undefined;
+			const message = reply.message ?? '';
+			// With the board open, a one-line answer goes on its activity
+			// line; longer ones, like help, still go to the feed.
+			const isOneLine = message !== '' && !message.includes('\n');
+			if (hasPane() && action.kind !== 'settings' && isOneLine) {
+				notice = message;
+				cmd.ui.refreshWidgets();
+				return undefined;
+			}
+			return message ? {message} : undefined;
 		},
 	});
 

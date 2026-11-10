@@ -39,6 +39,7 @@ interface Stub {
 	readonly asked: () => readonly {prompt: string; signal?: AbortSignal}[];
 	// The TUI mounting its surface, which happens after mods load.
 	readonly mount: () => void;
+	readonly toasts: string[];
 }
 
 function loadChess(
@@ -52,6 +53,7 @@ function loadChess(
 	let command: ModCommand | undefined;
 	let pane: ModPane | undefined;
 	const opened: {id: string; focus: boolean}[] = [];
+	const toasts: string[] = [];
 	const dialogs: string[][] = [];
 	const picked: (string | undefined)[] = [];
 	const answers: (ModModelCompleteResult | 'hold')[] = [];
@@ -76,6 +78,9 @@ function loadChess(
 				opened.push({id, focus: openOptions?.focus === true});
 			},
 			refreshWidgets: () => {},
+			toast: text => {
+				toasts.push(text);
+			},
 			select: async ({options}) => {
 				dialogs.push(options.map(option => option.label));
 				return picked.shift();
@@ -119,6 +124,7 @@ function loadChess(
 				typeof node === 'object' && node.type === 'select',
 		);
 	return {
+		toasts,
 		mount: () => {
 			isMounted = options.hasPane;
 		},
@@ -246,7 +252,7 @@ describe('LLMChess mod', () => {
 		await chess.run('undo');
 		expect(chess.feed[chess.feed.length - 1]).not.toContain('1. d4');
 		await chess.run('resign');
-		expect(chess.status()).toContain('black wins by resignation');
+		expect(chess.status()).toContain('LLM beat you by resignation');
 	});
 
 	it('resumes the saved game after a reload', async () => {
@@ -279,6 +285,32 @@ describe('LLMChess mod in a pane', () => {
 		expect(late.opened).toEqual([{id: 'board', focus: true}]);
 		expect(late.feed).toHaveLength(0);
 		expect(late.pane()).toContain('Your move');
+	});
+
+	it('toasts a win once, and says it in the footer', async () => {
+		const file = defaultGameFile();
+		mkdirSync(dirname(file), {recursive: true});
+		writeFileSync(
+			file,
+			JSON.stringify({
+				fens: [
+					'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1',
+					'rnbqkbnr/pppppppp/8/8/8/5P2/PPPPP1PP/RNBQKBNR b KQkq - 0 1',
+					'rnbqkbnr/pppp1ppp/8/4p3/8/5P2/PPPPP1PP/RNBQKBNR w KQkq e6 0 2',
+					'rnbqkbnr/pppp1ppp/8/4p3/6P1/5P2/PPPPP2P/RNBQKBNR b KQkq g3 0 2',
+				],
+				sanLog: ['f3', 'e5', 'g4'],
+				player: 'b',
+				level: 3,
+				opponent: 'engine',
+				resigned: false,
+			}),
+		);
+		const loaded = loadChess({hasPane: true});
+		await loaded.run('Qh4');
+		await loaded.run('');
+		expect(loaded.toasts).toEqual(['♚ You beat Opponent in 2 moves']);
+		expect(loaded.status()).toContain('You beat Opponent in 2 moves');
 	});
 
 	it('leaves the keyboard at the prompt for /chess <move>', async () => {
@@ -330,7 +362,8 @@ describe('LLMChess mod in a pane', () => {
 	it('shows your move and Thinking… before the engine answers', () => {
 		chess.pick('e2');
 		chess.pick('e4');
-		expect(chess.pane()).toContain('is thinking…');
+		expect(chess.pane()).toMatch(/^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] LLM is thinking… \d+\.\ds$/m);
+		expect(chess.pane()).toContain('Waiting · You played e4');
 		expect(chess.pane()).toContain('You played e4');
 	});
 
@@ -338,7 +371,8 @@ describe('LLMChess mod in a pane', () => {
 		chess.pick('e2');
 		chess.pick('e4');
 		const reply = await chess.run('level 1');
-		expect(reply?.message).toContain('finish its move');
+		// With the board open, the answer goes on its one-line activity row.
+		expect(reply).toBeUndefined();
 		await settled(() => /^e4 \S+$/.test(chess.sans()) && isIdle());
 	});
 
@@ -417,7 +451,7 @@ describe('LLMChess mod in a pane', () => {
 		);
 		const loaded = loadChess({hasPane: true});
 		const reply = await loaded.run('e5');
-		expect(reply?.message).toContain('opponent is to move');
+		expect(reply).toBeUndefined();
 		await settled(() => loaded.status().includes('your move'));
 		expect(loaded.pane()).not.toContain('Level 99');
 	});
@@ -442,7 +476,7 @@ describe('LLMChess against the session LLM', () => {
 		chess.pick('e4');
 		await settled(() => chess.sans() === 'e4 e5' && isIdle());
 		expect(chess.pane()).toContain('Test Model played e5');
-		expect(chess.pane()).toContain('Test Model: "Your move, human."');
+		expect(chess.pane()).toContain('“Your move, human.”');
 		expect(chess.asked()[0]?.prompt).toContain('You play black.');
 		expect(chess.asked()[0]?.prompt).toContain('Legal moves:');
 	});
@@ -500,8 +534,8 @@ describe('LLMChess against the session LLM', () => {
 	});
 
 	it('still switches opponent from the prompt', async () => {
-		const reply = await chess.run('vs engine');
-		expect(reply?.message).toContain('Now playing the engine');
+		await chess.run('vs engine');
+		expect(chess.pane()).toContain('Now playing the engine');
 	});
 
 	it('cancels the LLM call when a new game replaces the board', async () => {

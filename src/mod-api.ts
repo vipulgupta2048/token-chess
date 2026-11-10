@@ -54,6 +54,11 @@ export interface ModUi {
 	pane(pane: ModPane): Disposable;
 	openPane(id: string, options?: {focus?: boolean}): void;
 	refreshWidgets(): void;
+	// Absent on hosts older than toasts.
+	toast?(
+		text: string,
+		options?: {level?: 'info' | 'success' | 'warning' | 'error'},
+	): void;
 	select(params: {
 		title: string;
 		options: readonly {label: string; description?: string}[];
@@ -85,6 +90,8 @@ export interface ModApi {
 	readonly ui: ModUi;
 	// Absent on hosts older than mod model calls.
 	readonly model?: ModModel;
+	// Absent on hosts older than the mod clock.
+	readonly clock?: {every(ms: number, callback: () => void): Disposable};
 	// The session's model id; absent on older hosts, undefined before a session binds.
 	getModel?(): string | undefined;
 	hooks(hooks: ModHooks): Disposable;
