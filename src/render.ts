@@ -186,3 +186,22 @@ export function bold(text: string): string {
 export function dim(text: string): string {
 	return `${DIM}${text}${RESET}`;
 }
+
+export function red(text: string): string {
+	return `\x1b[31m${text}${RESET}`;
+}
+
+export function yellow(text: string): string {
+	return `\x1b[33m${text}${RESET}`;
+}
+
+// The thinking spinner's frames, one every SPINNER_MS.
+export const SPINNER = '⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏';
+export const SPINNER_MS = 100;
+
+// Plain text cut to one line of `width`, ending in … when it didn't fit.
+export function oneLine(text: string, width: number): string {
+	const line = text.replace(/\s*\n\s*/g, ' ').trim();
+	if (line.length <= width) return line;
+	return `${line.slice(0, Math.max(0, width - 1)).trimEnd()}…`;
+}
