@@ -53,6 +53,7 @@ import {
 	renderBoardLines,
 	wrapText,
 } from './src/render.js';
+import {modelName, moveVerb} from './src/names.js';
 import {explainIllegal, parseMove} from './src/san.js';
 import {
 	defaultGameFile,
@@ -97,8 +98,17 @@ interface LlmTurn extends LlmReply {
 	readonly problem?: string;
 }
 
-function rivalName(game: Game): string {
-	return game.opponent === 'llm' ? 'LLM' : 'Engine';
+// The opponent by name: the session's model as people say it, or the engine.
+function rivalName(game: Game, llm: string): string {
+	return game.opponent === 'llm' ? llm : 'Engine';
+}
+
+// Who made the opponent's last move, when it differs from the opponent: the
+// engine standing in for the model.
+interface Mover {
+	readonly game: Game;
+	readonly name: string;
+	readonly note?: string;
 }
 
 // Where the arrow-key control is. It belongs to one game state, so any move,
@@ -121,20 +131,20 @@ function lastMoveSquares(game: Game): readonly number[] {
 	return changed;
 }
 
-function promptLine(game: Game): string {
+function promptLine(game: Game, llm: string): string {
 	const outcome = outcomeOf(game);
 	if (outcome.kind !== 'ongoing')
 		return `${bold(describeOutcome(outcome))} ${dim('· /chess new to play again')}`;
 	const position = currentPosition(game);
 	const check = isInCheck(position) ? `${bold('Check!')} ` : '';
 	if (position.turn !== game.player)
-		return `${check}${dim(`${rivalName(game)} is thinking…`)}`;
+		return `${check}${dim(`${rivalName(game, llm)} is thinking…`)}`;
 	const examples =
 		game.player === 'w' ? 'e4, Nf3, O-O or e2e4' : 'e5, Nf6, O-O or e7e5';
 	return `${check}Your move ${dim(`· /chess ${examples}`)}`;
 }
 
-function boardView(game: Game): BoardView {
+function boardView(game: Game, llm: string): BoardView {
 	const position = currentPosition(game);
 	const moves = moveListText(game, 10);
 	const king = position.turn === 'w' ? 'K' : 'k';
@@ -144,16 +154,21 @@ function boardView(game: Game): BoardView {
 		highlight: lastMoveSquares(game),
 		...(isInCheck(position) ? {checked: position.board.indexOf(king)} : {}),
 		heading: dim(
-			`${NAME} · you play ${colorName(game.player)} against the ${rivalName(game)} · move ${position.fullmove}`,
+			`${NAME} · you play ${colorName(game.player)} against ${rivalName(game, llm)} · move ${position.fullmove}`,
 		),
-		notes: [...(moves ? [moves] : []), promptLine(game)],
+		notes: [...(moves ? [moves] : []), promptLine(game, llm)],
 	};
 }
 
 // The board with the picked piece lit and where it can go marked: dots on
 // empty squares, the same light on anything it captures.
-function pickedView(game: Game, from: string | undefined): BoardView {
-	const view = boardView(game);
+function pickedView(params: {
+	game: Game;
+	from: string | undefined;
+	llm: string;
+}): BoardView {
+	const {game, from, llm} = params;
+	const view = boardView(game, llm);
 	if (!from) return view;
 	const moves = movesFrom(currentPosition(game), from);
 	return {
@@ -170,27 +185,42 @@ function capitalized(word: string): string {
 	return (word[0] ?? '').toUpperCase() + word.slice(1);
 }
 
-function lastMoveText(game: Game): string {
-	const last = game.sanLog[game.sanLog.length - 1];
-	if (!last) return '';
-	const mover = opponent(currentPosition(game).turn);
-	return dim(` · ${capitalized(colorName(mover))} played ${last}`);
+// "You played e4", "DeepSeek V4.1 Flash took your knight (Nxe4)".
+function lastMoveText(params: {
+	game: Game;
+	llm: string;
+	mover?: Mover;
+}): string {
+	const {game, llm, mover} = params;
+	if (game.sanLog.length === 0) return '';
+	const isPlayers = opponent(currentPosition(game).turn) === game.player;
+	if (isPlayers) return dim(` · You ${moveVerb(game, true)}`);
+	const by = mover?.game === game ? mover : undefined;
+	const name = by?.name ?? rivalName(game, llm);
+	const note = by?.note ? ` ${by.note}` : '';
+	return dim(` · ${name} ${moveVerb(game, false)}${note}`);
 }
 
 // The line over the board: what the game needs from you right now.
-function paneHeadline(game: Game, thinking: boolean): string {
+function paneHeadline(params: {
+	game: Game;
+	thinking: boolean;
+	llm: string;
+	mover?: Mover;
+}): string {
+	const {game, thinking, llm} = params;
 	const outcome = outcomeOf(game);
 	if (outcome.kind !== 'ongoing')
-		return `${bold(capitalized(describeOutcome(outcome)))}${lastMoveText(game)}`;
+		return `${bold(capitalized(describeOutcome(outcome)))}${lastMoveText(params)}`;
 	const check = isInCheck(currentPosition(game)) ? bold('Check! ') : '';
 	const prompt = thinking
-		? `${rivalName(game)} is thinking…`
+		? `${rivalName(game, llm)} is thinking…`
 		: bold('Your move');
-	return `${check}${prompt}${lastMoveText(game)}`;
+	return `${check}${prompt}${lastMoveText(params)}`;
 }
 
-function statusText(game: Game, thinking: boolean): string {
-	if (thinking) return `${PIECE} ${NAME} · ${rivalName(game)} thinking…`;
+function statusText(game: Game, thinking: boolean, llm: string): string {
+	if (thinking) return `${PIECE} ${NAME} · ${rivalName(game, llm)} thinking…`;
 	const outcome = outcomeOf(game);
 	if (outcome.kind !== 'ongoing')
 		return `${PIECE} ${NAME} · ${describeOutcome(outcome)}`;
@@ -199,7 +229,7 @@ function statusText(game: Game, thinking: boolean): string {
 	const turn =
 		currentPosition(game).turn === game.player
 			? 'your move'
-			: `${rivalName(game)} to move`;
+			: `${rivalName(game, llm)} to move`;
 	return `${PIECE} ${NAME} · ${turn}${lastText}`;
 }
 
@@ -228,6 +258,17 @@ export default function llmChess(cmd: ModApi): void {
 	let pending: AbortController | undefined;
 	// The model that answered last, named in the pane once known.
 	let model: string | undefined;
+	// Who made the opponent's last move, when the engine stood in.
+	let mover: Mover | undefined;
+
+	function llmName(): string {
+		const id = model ?? cmd.getModel?.();
+		return id ? modelName(id) : 'LLM';
+	}
+
+	function rival(current: Game): string {
+		return rivalName(current, llmName());
+	}
 	// The LLM's remark with its last move, until the next move.
 	let remark: {readonly game: Game; readonly text: string} | undefined;
 	// The answer to the last thing typed in the pane, until the next one.
@@ -246,14 +287,14 @@ export default function llmChess(cmd: ModApi): void {
 	}
 
 	function paint(current: Game): void {
-		cmd.ui.setStatus(statusText(current, thinking));
+		cmd.ui.setStatus(statusText(current, thinking, llmName()));
 		if (hasPane()) cmd.ui.refreshWidgets();
 	}
 
 	function show(current: Game): void {
 		saveGame(file, current);
 		paint(current);
-		if (!hasPane()) cmd.showEntry(RENDERER, boardView(current));
+		if (!hasPane()) cmd.showEntry(RENDERER, boardView(current, llmName()));
 	}
 
 	async function engineMove(current: Game): Promise<Move | undefined> {
@@ -338,6 +379,10 @@ export default function llmChess(cmd: ModApi): void {
 		const next = playMove(current, chosen);
 		game = next;
 		remark = asked.remark ? {game: next, text: asked.remark} : undefined;
+		mover =
+			current.opponent === 'llm' && !asked.move
+				? {game: next, name: 'Engine', note: `(subbing in for ${llmName()})`}
+				: undefined;
 		show(next);
 		return asked.problem;
 	}
@@ -367,7 +412,7 @@ export default function llmChess(cmd: ModApi): void {
 		const current = currentGame();
 		if (thinking)
 			return {
-				message: `The ${rivalName(current)} is still thinking. One moment.`,
+				message: `${rival(current)} is still thinking. One moment.`,
 			};
 		if (outcomeOf(current).kind !== 'ongoing')
 			return {message: 'This game is over. /chess new starts another.'};
@@ -393,7 +438,7 @@ export default function llmChess(cmd: ModApi): void {
 		if (action.kind === 'move') return move(action.text);
 		if (action.kind === 'settings') return openSettings(currentGame());
 		const current = currentGame();
-		const waitMessage = `Wait for the ${rivalName(current)} to finish its move.`;
+		const waitMessage = `Wait for ${rival(current)} to finish its move.`;
 		if (action.kind === 'opponent') {
 			if (thinking) return {message: waitMessage};
 			game = {...current, opponent: action.opponent};
@@ -433,7 +478,7 @@ export default function llmChess(cmd: ModApi): void {
 	// the engine is: the LLM, or the engine at one of its levels.
 	async function openSettings(current: Game): Promise<Reply> {
 		if (thinking)
-			return {message: `Wait for the ${rivalName(current)} to finish its move.`};
+			return {message: `Wait for ${rival(current)} to finish its move.`};
 		const choices = [
 			{
 				label: 'Your session LLM',
@@ -527,7 +572,7 @@ export default function llmChess(cmd: ModApi): void {
 		const {stage, from, page} = currentPick(current);
 		if (thinking)
 			return [
-				dim(`${rivalName(current)} to move`),
+				dim(`${rival(current)} to move`),
 				select('wait', [{label: 'Thinking…', value: WAIT}]),
 			];
 		if (stage === 'menu')
@@ -587,15 +632,21 @@ export default function llmChess(cmd: ModApi): void {
 		const current = currentGame();
 		const said =
 			remark?.game === current
-				? wrapText(`${rivalName(current)}: "${remark.text}"`, width).map(
+				? wrapText(`${rival(current)}: "${remark.text}"`, width).map(
 						line => dim(line),
 					)
 				: [];
 		return [
-			paneHeadline(current, thinking),
+			paneHeadline({game: current, thinking, llm: llmName(), mover}),
 			...said,
 			BLANK,
-			...renderBoardLines(pickedView(current, currentPick(current).from)),
+			...renderBoardLines(
+				pickedView({
+					game: current,
+					from: currentPick(current).from,
+					llm: llmName(),
+				}),
+			),
 			BLANK,
 			...(notice ? [...wrapText(notice, width), BLANK] : []),
 			...controlNodes(current, width),
@@ -638,13 +689,13 @@ export default function llmChess(cmd: ModApi): void {
 	// session; while the agent works, the footer offers a game if there is none.
 	cmd.hooks({
 		onSessionStart: () => {
-			if (game) cmd.ui.setStatus(statusText(game, thinking));
+			if (game) cmd.ui.setStatus(statusText(game, thinking, llmName()));
 		},
 	});
 	cmd.on('run_start', () => {
 		cmd.ui.setStatus(
 			game
-				? statusText(game, thinking)
+				? statusText(game, thinking, llmName())
 				: `${PIECE} /chess to play while you wait`,
 		);
 	});
